@@ -76,7 +76,16 @@ export const TerminalView: React.FC<{
     }
     fit()
 
-    session.onStatus = s => statusRef.current?.(s)
+    session.onStatus = s => {
+      // An attach replaces the whole screen: the daemon replays the session's
+      // current contents, which has nothing to do with whatever this canvas
+      // was showing. Without repainting all of it, the replay lands in the
+      // emulator and stays invisible — the terminal reads as empty until a
+      // keystroke happens to dirty a row, which is exactly how reattaching
+      // looked like the box had lost the session.
+      if (s === "attached" || s === "connected" || s === "caught up") renderer.invalidate()
+      statusRef.current?.(s)
+    }
     session.onBytes = () => {
       renderer.markDamage(session.term?.takeDamage() ?? "none")
     }
