@@ -6,6 +6,7 @@ import { attachSubscription, releaseSubscription, requireSubscriptionForBox } fr
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
 import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
+import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES } from "./catalog.ts"
@@ -56,6 +57,9 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
   // produces; the per-request line cap bounds one write, this bounds how many
   // a wedged or hostile box can make.
   const callback = pipeline(parseJson, rateLimit({ db, key: "boxes.callback", limit: 120, windowSeconds: 60 }))
+  const callbackJson = callback
+  // A GET carries no body, so it cannot go through `parseJson`.
+  const callbackGet = pipeline(rateLimit({ db, key: "boxes.callback", limit: 120, windowSeconds: 60 }))
 
   return [
     // What the wizard renders. Served rather than hardcoded in the client so
@@ -64,7 +68,10 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
       "/boxes/catalog",
       authed(async c =>
         json(c, 200, {
-          tools: CATALOG.map(({ install, ...rest }) => rest),
+          // `install` and `credentials` are stripped: one is a shell command
+          // the client has no business running, the other is a list of file
+          // paths that only the box and the sync path need to know.
+          tools: CATALOG.map(({ install, credentials, ...rest }) => rest),
           sizes: SIZES,
           regions: REGIONS,
           defaults: defaults(),
@@ -212,6 +219,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               daemonUrl: await getSetting(db, SETTING.daemonUrl),
               callbackUrl: `${appUrl}/api/boxes/callback`,
               logUrl: `${appUrl}/api/boxes/callback/log`,
+              loginsUrl: `${appUrl}/api/boxes/callback/logins`,
               callbackSecret: agentToken,
               shell,
             }),
@@ -314,6 +322,83 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
             .limit(500),
         )) as any[]
         return json(c, 200, { status: box.status, detail: box.status_detail, events: rows })
+      }),
+    ),
+
+    // ---- agent logins ------------------------------------------------------
+    //
+    // A box is cattle; the login is not. Signing in to an agent CLI again on
+    // every new box is the single most tedious thing about destroying one, and
+    // it is what stops "destroy and recreate" from being the cheap act the
+    // wizard's stored manifest is meant to make it.
+    //
+    // Authenticated by the box's own token, like the setup callbacks: the box
+    // proves which box it is, and the control plane decides whose logins those
+    // are. Deliberately *not* passed through cloud-init — user data is stored
+    // by the provider and served to anything on the box that can reach the
+    // metadata service, which is a poor place for a credential that reaches
+    // somebody's Anthropic account.
+
+    get(
+      "/boxes/callback/logins",
+      callbackGet(async c => {
+        const presented = (c.headers.get("authorization") ?? "").slice(7).trim()
+        const hostname = String(c.query.hostname ?? "")
+        if (!presented || !hostname) return json(c, 400, { error: "bad callback" })
+        const box = (await db.one(from("boxes").where(q => q("hostname").equals(hostname)))) as any
+        if (!box || box.agent_token !== presented) return json(c, 403, { error: "no" })
+        if (!secretsAvailable()) return json(c, 200, { files: [] })
+        const rows = (await db.all(from("agent_logins").where(q => q("user_id").equals(box.user_id)))) as any[]
+        const files: { path: string; content: string }[] = []
+        for (const row of rows) {
+          const content = await open(row.sealed)
+          // A row sealed under a rotated key is not an error to report — it is
+          // a login that has to be done once more.
+          if (content !== null) files.push({ path: row.path, content })
+        }
+        return json(c, 200, { files })
+      }),
+    ),
+
+    post(
+      "/boxes/callback/logins",
+      callbackJson(async c => {
+        const presented = (c.headers.get("authorization") ?? "").slice(7).trim()
+        const b = c.body as { hostname?: string; tool?: string; path?: string; content?: string }
+        if (!presented || !b.hostname) return json(c, 400, { error: "bad callback" })
+        const box = (await db.one(from("boxes").where(q => q("hostname").equals(b.hostname!)))) as any
+        if (!box || box.agent_token !== presented) return json(c, 403, { error: "no" })
+        if (!secretsAvailable()) {
+          return json(c, 503, { error: "This instance cannot store logins: DEVPIPE_SECRET_KEY is not set." })
+        }
+
+        const tool = String(b.tool ?? "").slice(0, 40)
+        const path = String(b.path ?? "")
+        const content = String(b.content ?? "")
+        // Only paths the catalogue names. Without this a box could ask the
+        // control plane to keep any file it liked, which is a storage service
+        // with no quota rather than a login.
+        const known = CATALOG.some(t => t.id === tool && (t.credentials ?? []).includes(path))
+        if (!known) return json(c, 422, { error: "not a login file" })
+        if (content.length > 256_000) return json(c, 413, { error: "too large" })
+
+        const sealed = await seal(content)
+        const existing = (await db.one(
+          from("agent_logins")
+            .where(q => q("user_id").equals(box.user_id))
+            .where(q => q("tool").equals(tool))
+            .where(q => q("path").equals(path)),
+        )) as any
+        if (existing) {
+          await db.execute(
+            from("agent_logins")
+              .where(q => q("id").equals(existing.id))
+              .update({ sealed, updated_at: new Date() }),
+          )
+        } else {
+          await db.execute(from("agent_logins").insert({ user_id: box.user_id, tool, path, sealed }))
+        }
+        return json(c, 200, { ok: true })
       }),
     ),
 

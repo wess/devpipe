@@ -121,6 +121,33 @@ nowhere to inject from:
 
 `tests/legal.test.ts` fails if an inline `<script>` reappears on the lander.
 
+## Agent logins
+
+An agent CLI's login is carried between a user's boxes so that signing in again
+is not the price of destroying one. It is the only value here that is not this
+instance's own secret: it belongs to whoever signed in, reaches their Anthropic
+or OpenAI account rather than anything of ours, and can spend their money.
+
+- Encrypted at rest with AES-256-GCM (`src/util/secretbox.ts`), keyed from
+  `DEVPIPE_SECRET_KEY` in `/etc/devpipe.env` — never in the database it
+  protects. Without the key the instance stores nothing rather than storing
+  plaintext.
+- Fetched by the box over TLS using its own agent token, **not** passed through
+  cloud-init. Provider user data is retained by DigitalOcean and served to
+  anything on the box that can reach the metadata service, which is no place
+  for a credential of this kind.
+- Only paths the catalogue names are accepted, so a box cannot ask the control
+  plane to keep arbitrary files, and the restore refuses any path that escapes
+  the home directory.
+- Files land `0600`, owned by `devpipe`.
+
+There is no browser-side interception of the OAuth flow, and there should not
+be. The providers' login pages set `frame-ancestors 'none'`, cross-origin
+isolation makes reading a token out of a frame impossible anyway, and a page
+that renders somebody's identity provider inside our chrome to capture the
+credential is the shape of a phishing attack regardless of who wrote it. The
+sign-in happens in the terminal, on the real origin, once.
+
 ## What is deliberately not defended
 
 - **What runs on a box.** Terminals are the product, the daemon holds the pty,

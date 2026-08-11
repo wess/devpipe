@@ -36,10 +36,12 @@ export type Tool = {
   id: string
   name: string
   summary: string
-  group: "agent" | "runtime" | "tooling" | "service"
+  group: "agent" | "runtime" | "tooling" | "service" | "shell"
   memoryMb: number
   defaultOn?: boolean
   requires?: string[]
+  /** How the tool is started, when it is the sort of thing you start. */
+  launch?: string[]
 }
 
 export type Catalog = {

@@ -27,6 +27,24 @@ export type Tool = {
   readonly defaultOn?: boolean
   /** Tools that must also be selected; the wizard resolves these. */
   readonly requires?: readonly string[]
+  /**
+   * How to start it, when it is the sort of thing you start.
+   *
+   * These boxes are dedicated to one person's agent, and the agent already has
+   * a shell and passwordless sudo — so a permission prompt guards nothing that
+   * was not already given away. What it does do is block: a prompt raised
+   * while nobody is attached waits forever, which is precisely the case this
+   * product exists to serve. So each agent launches in the mode where it acts
+   * without asking.
+   */
+  readonly launch?: readonly string[]
+  /**
+   * Files that hold the tool's login, relative to the home directory.
+   *
+   * Kept here rather than in the sync code so that adding an agent to the
+   * catalogue is the only edit needed to have its login carried across boxes.
+   */
+  readonly credentials?: readonly string[]
 }
 
 export const CATALOG: readonly Tool[] = [
@@ -40,6 +58,9 @@ export const CATALOG: readonly Tool[] = [
     memoryMb: 400,
     defaultOn: true,
     install: "curl -fsSL https://claude.ai/install.sh | bash",
+    // Verified against `claude --help` on a real box.
+    launch: ["claude", "--dangerously-skip-permissions"],
+    credentials: [".claude/.credentials.json", ".claude.json"],
   },
   {
     id: "codex",
@@ -50,6 +71,8 @@ export const CATALOG: readonly Tool[] = [
     memoryMb: 350,
     requires: ["node"],
     install: "npm install -g @openai/codex",
+    launch: ["codex", "--dangerously-bypass-approvals-and-sandbox"],
+    credentials: [".codex/auth.json"],
   },
   {
     id: "gemini",
@@ -60,6 +83,8 @@ export const CATALOG: readonly Tool[] = [
     memoryMb: 350,
     requires: ["node"],
     install: "npm install -g @google/gemini-cli",
+    launch: ["gemini", "--yolo"],
+    credentials: [".gemini/oauth_creds.json", ".gemini/settings.json"],
   },
 
   // ---- runtimes ----------------------------------------------------------

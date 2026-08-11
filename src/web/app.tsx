@@ -334,6 +334,17 @@ const Workspace: React.FC = () => {
   const activeSessionRef = useRef<string | null>(null)
   activeSessionRef.current = activeSession
 
+  // The agents actually on this box, with the argv each is launched by. The
+  // catalogue comes from the API rather than a copy here, so web and iOS
+  // cannot drift on what a tool is called or how it starts.
+  const [catalog, setCatalog] = useState<api.Catalog | null>(null)
+  useEffect(() => {
+    api
+      .catalog()
+      .then(setCatalog)
+      .catch(() => {})
+  }, [])
+
   const refreshBoxes = useCallback(async () => {
     try {
       const list = await api.listBoxes()
@@ -355,6 +366,19 @@ const Workspace: React.FC = () => {
   }, [refreshBoxes])
 
   const box = boxes.find(b => b.id === activeBox) ?? null
+
+  // Agents present on this box, in catalogue order, each with the argv it is
+  // started by. `launch` carries the flag that lets an agent act without
+  // stopping to ask — a prompt raised while nobody is attached waits forever,
+  // and these boxes are dedicated to the agent anyway.
+  const agents = (catalog?.tools ?? [])
+    .filter(t => t.group === "agent" && t.launch && box?.tools.includes(t.id))
+    .map(t => ({
+      id: t.id,
+      name: t.name,
+      short: t.launch?.[0] ?? t.id,
+      launch: [...(t.launch ?? [])],
+    }))
   const boxId = box?.id
   const boxReady = box?.status === "ready"
 
@@ -552,8 +576,8 @@ const Workspace: React.FC = () => {
                 <>
                   <TerminalIcon size={28} />
                   <p>Open a terminal to get started.</p>
-                  <button type="button" onClick={() => newTerminal(["claude"])}>
-                    Start Claude Code
+                  <button type="button" onClick={() => newTerminal(agents[0]?.launch ?? [])}>
+                    {agents[0] ? `Start ${agents[0].name}` : "Open a shell"}
                   </button>
                 </>
               ) : (

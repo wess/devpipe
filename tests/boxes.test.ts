@@ -117,6 +117,7 @@ describe("what a box is built with", () => {
     daemonUrl: "https://example.com/devpiped",
     callbackUrl: "https://example.com/cb",
     logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
     callbackSecret: "secret",
   })
 

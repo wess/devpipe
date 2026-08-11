@@ -27,11 +27,17 @@ export const cloudInit = (opts: {
   daemonUrl: string
   callbackUrl: string
   logUrl: string
+  /** Where a box fetches and stores the account's agent logins. */
+  loginsUrl: string
   callbackSecret: string
   /** Login shell for the box's user. Bash when unset. */
   shell?: string
 }): string => {
   const steps = resolve(opts.tools)
+  // Only the logins for tools this box actually has. A watcher on a path that
+  // will never exist is not harmful, but it is noise in a unit list somebody
+  // will one day read while trying to work out what a box does.
+  const loginFiles = steps.flatMap(t => (t.credentials ?? []).map(path => ({ tool: t.id, path })))
   const shell = shellPath(opts.shell ?? "bash")
 
   // Each install is allowed to fail without taking the box down with it. A
@@ -134,9 +140,23 @@ chmod 0440 /etc/sudoers.d/devpipe
 # Installers drop binaries in ~/.local/bin and ~/.bun/bin; a login shell has to
 # find them or the tool is installed and still "not found".
 cat > /etc/profile.d/devpipe-path.sh <<'PATHEOF'
-export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
 PATHEOF
 chmod 0644 /etc/profile.d/devpipe-path.sh
+# Fish is not a POSIX shell and does not read profile.d at all, so the file
+# above is invisible to it. Without this a fish box has no ~/.local/bin on the
+# PATH of any login shell, and every agent CLI is "unknown command" while being
+# installed and perfectly runnable — the same failure the daemon's own PATH was
+# added to fix, one shell over.
+mkdir -p /etc/fish/conf.d
+cat > /etc/fish/conf.d/devpipe-path.fish <<'FISHEOF'
+for dir in $HOME/.local/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/go/bin
+    if not contains $dir $PATH
+        set -gx PATH $dir $PATH
+    end
+end
+FISHEOF
+chmod 0644 /etc/fish/conf.d/devpipe-path.fish
 grep -q devpipe-path /home/devpipe/.bashrc 2>/dev/null || \
   echo '. /etc/profile.d/devpipe-path.sh' >> /home/devpipe/.bashrc
 chown devpipe:devpipe /home/devpipe/.bashrc
@@ -205,6 +225,103 @@ if systemctl is-active --quiet devpiped; then say "[ok] daemon running"; else
   say "[!!] daemon failed to start"
   journalctl -u devpiped -n 20 --no-pager
 fi
+
+phase "logins" "Restoring your agent logins"
+# Signing in to an agent again on every new box is the most tedious part of
+# destroying one, and it is what stops "destroy and recreate" from being the
+# cheap act the stored manifest is meant to make it.
+#
+# Fetched from the control plane over TLS rather than baked into user data:
+# the provider keeps user data and serves it to anything on the box that can
+# reach the metadata service, which is no place for a credential that reaches
+# somebody's Anthropic account.
+LOGINS=$(curl -fsS -m 20 -H "authorization: Bearer ${opts.callbackSecret}" \
+  "${opts.loginsUrl}?hostname=${opts.hostname}" 2>/dev/null || echo '{"files":[]}')
+RESTORED=$(echo "$LOGINS" | python3 - <<'PYEOF'
+import json, os, sys, pathlib
+home = "/home/devpipe"
+try:
+    files = json.load(sys.stdin).get("files", [])
+except Exception:
+    files = []
+n = 0
+for f in files:
+    # Never outside the home directory, whatever the control plane said.
+    rel = os.path.normpath(f.get("path", ""))
+    if rel.startswith("/") or rel.startswith(".."):
+        continue
+    dest = pathlib.Path(home) / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f.get("content", ""))
+    # A login is readable by its owner and nobody else.
+    os.chmod(dest, 0o600)
+    n += 1
+print(n)
+PYEOF
+)
+chown -R devpipe:devpipe /home/devpipe 2>/dev/null || true
+if [ "$RESTORED" -gt 0 ] 2>/dev/null; then
+  say "[ok] restored $RESTORED login file(s) — you should not have to sign in again"
+else
+  say "no stored logins yet; signing in once will carry to your next box"
+fi
+
+# Push a login back up whenever it changes, so the next box gets the current
+# one. A path unit rather than a timer: a login changes on sign-in and on token
+# refresh, both of which are events, and polling a file that changes twice a
+# month is a poor trade.
+cat > /usr/local/bin/devpipe-save-login <<'SAVEEOF'
+#!/usr/bin/env bash
+# usage: devpipe-save-login <tool> <path-relative-to-home>
+set -uo pipefail
+FILE="/home/devpipe/$2"
+[ -s "$FILE" ] || exit 0
+python3 - "$1" "$2" "$FILE" <<'PYEOF' | curl -fsS -m 20 -X POST \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $DEVPIPE_CALLBACK_SECRET" \
+  --data-binary @- "$DEVPIPE_LOGINS_URL" >/dev/null 2>&1 || true
+import json, sys
+tool, path, file = sys.argv[1], sys.argv[2], sys.argv[3]
+print(json.dumps({
+    "hostname": __import__("os").environ["DEVPIPE_HOSTNAME"],
+    "tool": tool,
+    "path": path,
+    "content": open(file, encoding="utf-8", errors="replace").read(),
+}))
+PYEOF
+SAVEEOF
+chmod 0755 /usr/local/bin/devpipe-save-login
+
+cat > /etc/devpipe/logins.env <<'LOGINENVEOF'
+DEVPIPE_CALLBACK_SECRET=${opts.callbackSecret}
+DEVPIPE_LOGINS_URL=${opts.loginsUrl}
+DEVPIPE_HOSTNAME=${opts.hostname}
+LOGINENVEOF
+chmod 0600 /etc/devpipe/logins.env
+${loginFiles
+  .map(
+    (f, i) => `
+cat > /etc/systemd/system/devpipe-login-${i}.service <<'UNITEOF'
+[Unit]
+Description=Save the ${f.tool} login
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/devpipe/logins.env
+ExecStart=/usr/local/bin/devpipe-save-login ${f.tool} ${f.path}
+UNITEOF
+cat > /etc/systemd/system/devpipe-login-${i}.path <<'PATHUNITEOF'
+[Unit]
+Description=Watch the ${f.tool} login
+[Path]
+PathModified=/home/devpipe/${f.path}
+Unit=devpipe-login-${i}.service
+[Install]
+WantedBy=multi-user.target
+PATHUNITEOF
+systemctl enable --now devpipe-login-${i}.path >/dev/null 2>&1 || true`,
+  )
+  .join("\n")}
+say "[ok] logins will follow you to your next box"
 
 phase "dns" "Waiting for this box's name to resolve"
 # Caddy asks Let's Encrypt over HTTP-01, which only works once the name points
