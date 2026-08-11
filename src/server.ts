@@ -46,8 +46,13 @@ const config = defineConfig({
   databaseUrl: env("DATABASE_URL", { default: "" }),
   appUrl: env("APP_URL", { default: "http://localhost:3001" }),
   boxDomain: env("BOX_DOMAIN", { default: "devpipe.com" }),
+  // Named for the header it sets rather than for one company: the API surface
+  // is Resend's, and Outbox implements it, so this is the key for whichever of
+  // them EMAIL_BASE_URL points at.
   resendApiKey: env("RESEND_API_KEY", { default: "" }),
   emailFrom: env("EMAIL_FROM", { default: "" }),
+  /** A Resend-compatible host to send through. Empty means Resend itself. */
+  emailBaseUrl: env("EMAIL_BASE_URL", { default: "" }),
 })
 
 /**
@@ -104,7 +109,11 @@ try {
 
 // Prints to stdout unless both a key and a from address are set, so a
 // development instance cannot mail a real person by accident.
-const emailer = createEmailer({ apiKey: config.resendApiKey, from: config.emailFrom })
+const emailer = createEmailer({
+  apiKey: config.resendApiKey,
+  from: config.emailFrom,
+  baseUrl: config.emailBaseUrl || null,
+})
 
 const baseFetch = router(
   ...authRoutes(db),

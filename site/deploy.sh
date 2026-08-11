@@ -117,8 +117,13 @@ UNIT
 
 # Email is off until both RESEND_API_KEY and EMAIL_FROM are added to
 # /etc/devpipe.env — the emailer prints to the journal instead, which is what a
-# password reset does on an instance that has no sending domain yet. Stripe
-# keys are not env vars; they go in the admin billing tab.
+# password reset does on an instance that has no sending domain yet.
+#
+# EMAIL_BASE_URL points at a Resend-compatible host to send through one of your
+# own instead: Outbox takes the same paths, bodies and error envelope, so the
+# key above is whichever host this names. Unset means Resend.
+#
+# Stripe keys are not env vars; they go in the admin billing tab.
 unit devpipe-api "Devpipe API" /usr/local/bin/devpipe-api \
 "Environment=PORT=3000
 Environment=HOST=127.0.0.1

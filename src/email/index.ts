@@ -12,6 +12,8 @@ export type { Emailer, EmailMessage, SendResult }
 export type EmailConfig = {
   apiKey?: string | null
   from?: string | null
+  /** A Resend-compatible host to send through — a self-hosted Outbox, say. */
+  baseUrl?: string | null
   /** Keep messages in memory instead of printing them. Tests read `sent`. */
   record?: boolean
 }
@@ -37,14 +39,14 @@ export const createRecordingEmailer = (): RecordingEmailer => {
 }
 
 /**
- * Resend when a key and a from address are both configured, and a driver that
- * prints to stdout when either is missing. Nothing leaves the machine unless
+ * A real sender when a key and a from address are both configured, and a driver
+ * that prints to stdout when either is missing. Nothing leaves the machine unless
  * someone deliberately configured a sending domain, which is what keeps a
  * development instance from mailing a real person mid-experiment.
  */
 export const createEmailer = (config: EmailConfig): Emailer => {
   if (config.record) return createRecordingEmailer()
-  return createAtlasEmailer({ apiKey: config.apiKey, from: config.from })
+  return createAtlasEmailer({ apiKey: config.apiKey, from: config.from, baseUrl: config.baseUrl })
 }
 
 /**
