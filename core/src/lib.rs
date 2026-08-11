@@ -11,7 +11,8 @@
 //! 10k cells a frame would cost more than the emulation does.
 
 use std::ffi::c_char;
-use vt::{Cell, CellFlags, Color, Terminal};
+use vt::selection::{Point, SelectionMode};
+use vt::{Cell, CellFlags, Color, Modes, MouseMode, Terminal};
 
 /// Owns the emulator plus the snapshot buffer we hand back to Swift.
 pub struct DpTerm {
@@ -22,6 +23,8 @@ pub struct DpTerm {
     out: Vec<u8>,
     title: Vec<u8>,
     link: Vec<u8>,
+    /// Reused by `dp_term_selection_text`, on the same terms as `link`.
+    sel: Vec<u8>,
 }
 
 /// One cell, flattened for the renderer. 16 bytes, `Copy`, no pointers — the
@@ -90,6 +93,7 @@ pub extern "C" fn dp_term_new(cols: u32, rows: u32, scrollback: u32) -> *mut DpT
         out: Vec::new(),
         title: Vec::new(),
         link: Vec::new(),
+        sel: Vec::new(),
     });
     Box::into_raw(t)
 }
@@ -272,13 +276,33 @@ pub unsafe extern "C" fn dp_term_link_at(
     t.link.as_ptr() as *const c_char
 }
 
-/// Keyboard-relevant modes, as bits: 1 = application cursor keys,
-/// 2 = application keypad, 4 = bracketed paste.
+/// Everything a client needs to encode input, as bits.
 ///
-/// The client cannot encode an arrow key without this. A TUI that has set
-/// DECCKM expects `ESC O A` and will ignore the `ESC [ A` a naive client
-/// sends — which is exactly how arrow keys end up dead inside a full-screen
-/// program while working fine at a shell prompt.
+/// ```text
+///   1  application cursor keys (DECCKM ?1)
+///   2  application keypad
+///   4  bracketed paste (?2004)
+///   8  alternate screen active
+///  16  mouse reporting: click (?1000)
+///  32  mouse reporting: drag (?1002) — implies click
+///  64  mouse reporting: any motion (?1003) — implies drag
+/// 128  SGR mouse encoding (?1006)
+/// 256  alternate scroll (?1007)
+/// ```
+///
+/// Bits 0-2 are the original contract and keep their meaning, so a client
+/// built against the old header reads them and ignores the rest.
+///
+/// The keyboard bits exist because a client cannot encode an arrow key
+/// without them: a TUI that has set DECCKM expects `ESC O A` and ignores the
+/// `ESC [ A` a naive client sends, which is how arrow keys end up dead inside
+/// a full-screen program while working fine at a shell prompt.
+///
+/// The mouse and scroll bits are the same problem one layer out. A client that
+/// cannot see them has no way to know that the wheel should become arrow keys
+/// on the alternate screen — where there is no scrollback to move through —
+/// or that the program has asked to receive clicks itself. Without them the
+/// wheel does nothing at all inside exactly the programs people run here.
 ///
 /// # Safety
 /// `t` must come from `dp_term_new`.
@@ -287,9 +311,122 @@ pub unsafe extern "C" fn dp_term_key_modes(t: *mut DpTerm) -> u32 {
     let Some(t) = (unsafe { t.as_mut() }) else {
         return 0;
     };
+    let modes = t.term.modes();
+    let mouse = match t.term.mouse_mode() {
+        MouseMode::None => 0,
+        MouseMode::Click => 1 << 4,
+        MouseMode::Drag => 1 << 5,
+        MouseMode::Motion => 1 << 6,
+    };
     (t.term.cursor_keys_app() as u32)
         | ((t.term.keypad_app() as u32) << 1)
         | ((t.term.bracketed_paste() as u32) << 2)
+        | ((t.term.is_alt_screen() as u32) << 3)
+        | mouse
+        | ((modes.contains(Modes::MOUSE_SGR) as u32) << 7)
+        | ((modes.contains(Modes::ALT_SCROLL) as u32) << 8)
+}
+
+// ---- Selection -------------------------------------------------------------
+//
+// The core owns the selection rather than the client, because what a selection
+// *is* depends on the grid: a logical line runs across soft wraps, a word stops
+// where the grid says a word stops, and a wide character occupies two columns
+// but is one character when copied. A client that tracked spans itself would
+// reimplement all of that and get the edges wrong.
+//
+// Points are absolute content coordinates: `0..rows-1` is the live screen and
+// negative lines run back into scrollback, so a visible row `r` at display
+// offset `off` is line `r - off`.
+
+/// Begin a selection. `mode` is 0 = cell, 1 = word, 2 = line, 3 = smart —
+/// a double click is word, a triple click is line.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_selection_start(t: *mut DpTerm, line: isize, col: usize, mode: u32) {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return;
+    };
+    let mode = match mode {
+        1 => SelectionMode::Word,
+        2 => SelectionMode::Line,
+        3 => SelectionMode::Smart,
+        _ => SelectionMode::Cell,
+    };
+    t.term.start_selection(mode, Point::new(line, col));
+}
+
+/// Move the selection's loose end — the drag.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_selection_update(t: *mut DpTerm, line: isize, col: usize) {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return;
+    };
+    t.term.update_selection(Point::new(line, col));
+}
+
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_selection_clear(t: *mut DpTerm) {
+    if let Some(t) = unsafe { t.as_mut() } {
+        t.term.clear_selection();
+    }
+}
+
+/// Writes `[start_line, start_col, end_line, end_col]` and returns 1 when
+/// there is a selection, 0 when there is not.
+///
+/// One call per frame rather than a per-cell predicate: the renderer walks
+/// thousands of cells, and asking across the ABI for each one costs more than
+/// the drawing does.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`; `out` must be writable for four `isize`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_selection_span(t: *mut DpTerm, out: *mut isize) -> u32 {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return 0;
+    };
+    let Some(sel) = t.term.selection() else {
+        return 0;
+    };
+    let (start, end) = (sel.start(), sel.end());
+    if let Some(out) = unsafe { out.as_mut() } {
+        let slots = unsafe { std::slice::from_raw_parts_mut(out as *mut isize, 4) };
+        slots[0] = start.line;
+        slots[1] = start.col as isize;
+        slots[2] = end.line;
+        slots[3] = end.col as isize;
+    }
+    1
+}
+
+/// The selected text, NUL-terminated and valid until the next call.
+///
+/// Trailing blanks on each row are trimmed and soft-wrapped rows are joined
+/// without a newline, which is the difference between pasting a command back
+/// and pasting a command with a line break through the middle of it.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_selection_text(t: *mut DpTerm) -> *const c_char {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return std::ptr::null();
+    };
+    let Some(text) = t.term.selection_text() else {
+        return std::ptr::null();
+    };
+    t.sel.clear();
+    t.sel.extend_from_slice(text.as_bytes());
+    t.sel.push(0);
+    t.sel.as_ptr() as *const c_char
 }
 
 /// Scroll the viewport through scrollback. Positive scrolls back, negative

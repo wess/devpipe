@@ -61,3 +61,12 @@ export const resolve = (packed: number, isForeground: boolean): string => {
 
 /** A default background needs no fill — the canvas is already that colour. */
 export const isDefaultBackground = (packed: number) => packed === 0
+
+/**
+ * The wash drawn over selected cells.
+ *
+ * Translucent on purpose: the alternative is re-inking each cell with a
+ * selection foreground and background, which means duplicating every colour
+ * rule the renderer already has and keeping the copy in step with it.
+ */
+export const SELECTION = "rgba(255, 180, 84, 0.28)"

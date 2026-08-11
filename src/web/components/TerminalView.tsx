@@ -1,6 +1,7 @@
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { DEFAULT_FONT_SIZE, gridFor } from "../terminal/metrics.ts"
+import { mouseMotionReport, mouseReport, wheelAction } from "../terminal/mouse.ts"
 import { Renderer } from "../terminal/render.ts"
 import { Session } from "../terminal/session.ts"
 
@@ -26,6 +27,8 @@ export const TerminalView: React.FC<{
   const sessionRef = useRef<Session | null>(null)
   const rendererRef = useRef<Renderer | null>(null)
   const gridRef = useRef({ cols: 0, rows: 0 })
+  /** The last completed selection, so copy has something to read. */
+  const selectedRef = useRef("")
   const [linkUnder, setLinkUnder] = useState<string | null>(null)
 
   // Held in refs and kept out of the effect's dependencies. A caller that
@@ -86,19 +89,116 @@ export const TerminalView: React.FC<{
     }
     raf = requestAnimationFrame(frame)
 
+    /** Pointer position as a cell, and as an absolute content line. */
+    const at = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      const col = Math.max(0, Math.min(renderer.cols() - 1, Math.floor((e.clientX - rect.left) / renderer.cellWidth)))
+      const row = Math.max(0, Math.min(renderer.rows() - 1, Math.floor((e.clientY - rect.top) / renderer.cellHeight)))
+      // Absolute content coordinates: row 0 of the viewport is `-offset` when
+      // the view is scrolled back, so a selection made in history stays on the
+      // text it was made on rather than on whatever later scrolls into place.
+      return { col, row, line: row - (session.term?.displayOffset() ?? 0) }
+    }
+
     // Bound natively rather than through React's `onWheel`: React attaches
     // wheel listeners passively, and a passive listener cannot preventDefault,
     // so every scroll of the terminal would also scroll the page.
     const onWheel = (e: WheelEvent) => {
       const term = session.term
-      // A full-screen program owns the viewport and keeps no scrollback; there
-      // is nothing to scroll through, so let the gesture go to the page.
-      if (!term || term.scrollbackLength() === 0) return
-      e.preventDefault()
+      if (!term) return
       const lines = renderer.linesForWheel(e.deltaY, e.deltaMode)
-      if (lines) session.scrollLines(-lines)
+      const { col, row } = at(e)
+      const action = wheelAction(
+        term.pointerModes(),
+        lines,
+        col,
+        row,
+        term.scrollbackLength() > 0,
+        term.keyModes().cursorApp,
+      )
+      // Only the page case leaves the gesture alone. Everything else is the
+      // terminal's, and letting it bubble scrolls the document underneath a
+      // terminal that just handled it.
+      if (action.kind === "page") return
+      e.preventDefault()
+      if (action.kind === "scrollback") session.scrollLines(-action.lines)
+      else session.send(action.bytes)
     }
     canvas.addEventListener("wheel", onWheel, { passive: false })
+
+    // Selection and mouse reporting share the pointer, so they are decided in
+    // one place: a program that has asked for the mouse gets it, and otherwise
+    // a drag selects text. Holding shift forces selection either way, which is
+    // the escape hatch every terminal offers for copying out of a full-screen
+    // program.
+    let dragging = false
+    const onMouseDown = (e: MouseEvent) => {
+      const term = session.term
+      if (!term || e.button > 2) return
+      const { col, row, line } = at(e)
+      const modes = term.pointerModes()
+      if (modes.reportClick && !e.shiftKey) {
+        const bytes = mouseReport(modes, e.button, col, row, true, {
+          shift: e.shiftKey,
+          alt: e.altKey,
+          ctrl: e.ctrlKey,
+        })
+        if (bytes) {
+          e.preventDefault()
+          session.send(bytes)
+        }
+        return
+      }
+      if (e.button !== 0) return
+      dragging = true
+      // One click is a cell, two is a word, three is the logical line — which
+      // follows soft wraps, so a wrapped command copies back as one command.
+      const mode = e.detail >= 3 ? 2 : e.detail === 2 ? 1 : 0
+      term.selectionStart(line, col, mode as 0 | 1 | 2)
+      renderer.invalidate()
+    }
+
+    const onMouseMove = (e: MouseEvent) => {
+      const term = session.term
+      if (!term) return
+      const { col, row, line } = at(e)
+      if (dragging) {
+        term.selectionUpdate(line, col)
+        renderer.invalidate()
+        return
+      }
+      const modes = term.pointerModes()
+      const bytes = mouseMotionReport(modes, e.buttons ? 0 : 3, col, row, e.buttons !== 0)
+      if (bytes) session.send(bytes)
+    }
+
+    const onMouseUp = (e: MouseEvent) => {
+      const term = session.term
+      if (!term) return
+      const { col, row } = at(e)
+      const modes = term.pointerModes()
+      if (dragging) {
+        dragging = false
+        // Kept, not cleared: the selection has to survive the mouse coming up
+        // or there is nothing left to copy.
+        selectedRef.current = term.selectionText()
+        return
+      }
+      if (modes.reportClick && !e.shiftKey) {
+        const bytes = mouseReport(modes, e.button, col, row, false, {
+          shift: e.shiftKey,
+          alt: e.altKey,
+          ctrl: e.ctrlKey,
+        })
+        if (bytes) session.send(bytes)
+      }
+    }
+
+    canvas.addEventListener("mousedown", onMouseDown)
+    // On window, so a drag that leaves the canvas still finishes rather than
+    // leaving the selection stuck to the pointer.
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
 
     const observer = new ResizeObserver(fit)
     observer.observe(wrap)
@@ -106,6 +206,9 @@ export const TerminalView: React.FC<{
     return () => {
       cancelAnimationFrame(raf)
       canvas.removeEventListener("wheel", onWheel)
+      canvas.removeEventListener("mousedown", onMouseDown)
+      window.removeEventListener("mousemove", onMouseMove)
+      window.removeEventListener("mouseup", onMouseUp)
       observer.disconnect()
       session.stop()
       sessionRef.current = null
@@ -114,10 +217,25 @@ export const TerminalView: React.FC<{
   }, [url, token, sessionId, fontSize])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Let the browser keep copy and paste; everything else belongs to the pty.
-    if ((e.metaKey || e.ctrlKey) && ["c", "v", "a"].includes(e.key.toLowerCase())) {
-      if (e.key.toLowerCase() === "c" && window.getSelection()?.toString()) return
-      if (e.key.toLowerCase() === "v") return
+    const key = e.key.toLowerCase()
+    if (e.metaKey || e.ctrlKey) {
+      // Copy is ours to serve. The grid is painted to a canvas, so there is no
+      // document selection for the browser to copy — `window.getSelection()`
+      // is always empty here, which is why the old passthrough could never
+      // fire and no terminal on this client had ever been copyable.
+      if (key === "c") {
+        const text = sessionRef.current?.term?.selectionText() || selectedRef.current
+        if (text) {
+          e.preventDefault()
+          void navigator.clipboard.writeText(text)
+          return
+        }
+        // Nothing selected: ctrl-C is an interrupt and has to reach the pty.
+        // Cmd-C is not, so it is left alone.
+        if (e.metaKey) return
+      }
+      // Paste arrives as a paste event, not as a keystroke.
+      if (key === "v") return
     }
     sessionRef.current?.key(e.nativeEvent)
   }, [])

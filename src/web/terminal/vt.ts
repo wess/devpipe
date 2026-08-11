@@ -49,6 +49,11 @@ type Exports = {
   dp_term_display_offset(t: number): number
   dp_term_scrollback_len(t: number): number
   dp_term_scroll_to_bottom(t: number): void
+  dp_term_selection_start(t: number, line: number, col: number, mode: number): void
+  dp_term_selection_update(t: number, line: number, col: number): void
+  dp_term_selection_clear(t: number): void
+  dp_term_selection_span(t: number, out: number): number
+  dp_term_selection_text(t: number): number
   dp_alloc(len: number): number
   dp_free(ptr: number, len: number): void
   dp_cell_size(): number
@@ -76,7 +81,13 @@ export const loadVt = async (source: string | BufferSource = "/vt.wasm"): Promis
   // callback schedules the next frame after drawing, one throw stops the
   // terminal for good. Check the newest symbols here so a stale build says so
   // once, at startup, and names the fix.
-  for (const name of ["dp_term_display_offset", "dp_term_scrollback_len", "dp_term_scroll_to_bottom"]) {
+  for (const name of [
+    "dp_term_display_offset",
+    "dp_term_scrollback_len",
+    "dp_term_scroll_to_bottom",
+    "dp_term_selection_span",
+    "dp_term_selection_text",
+  ]) {
     if (typeof (exports as unknown as Record<string, unknown>)[name] !== "function") {
       throw new Error(
         `vt.wasm is missing ${name}. Rebuild it: cd core && cargo build --release --target wasm32-unknown-unknown`,
@@ -90,11 +101,22 @@ export const vtReady = () => wasm !== null
 
 const SCREEN_BYTES = 20
 
+/** A NUL-terminated string out of wasm memory. */
+const readCString = (ptr: number): string => {
+  if (!wasm) return ""
+  const bytes = new Uint8Array(wasm.memory.buffer, ptr)
+  let end = 0
+  while (bytes[end] !== 0) end++
+  return new TextDecoder().decode(bytes.subarray(0, end))
+}
+
 export class Terminal {
   private handle: number
   private screenPtr: number
   private cellSize: number
   private damagePtr: number
+  /** Four i32 for `dp_term_selection_span`, allocated once. */
+  private spanPtr: number
   private damageCap: number
 
   constructor(
@@ -108,6 +130,7 @@ export class Terminal {
     this.cellSize = wasm.dp_cell_size()
     this.damageCap = 512
     this.damagePtr = wasm.dp_alloc(this.damageCap * 4)
+    this.spanPtr = wasm.dp_alloc(16)
   }
 
   dispose() {
@@ -115,6 +138,7 @@ export class Terminal {
     wasm.dp_term_free(this.handle)
     wasm.dp_free(this.screenPtr, SCREEN_BYTES)
     wasm.dp_free(this.damagePtr, this.damageCap * 4)
+    wasm.dp_free(this.spanPtr, 16)
     this.handle = 0
   }
 
@@ -189,6 +213,66 @@ export class Terminal {
     }
   }
 
+  /**
+   * What the program has asked to be told about the pointer, and what the
+   * wheel should do.
+   *
+   * Without this the wheel is dead in exactly the programs people run here. A
+   * full-screen program uses the alternate screen, the alternate screen keeps
+   * no scrollback, and a client that only knows how to move through scrollback
+   * therefore has nothing to move through — so the gesture does nothing and
+   * falls through to the page instead.
+   */
+  pointerModes() {
+    const raw = wasm?.dp_term_key_modes(this.handle) ?? 0
+    return {
+      altScreen: (raw & 8) !== 0,
+      /** The program wants clicks. Motion implies drag implies click. */
+      reportClick: (raw & (16 | 32 | 64)) !== 0,
+      reportDrag: (raw & (32 | 64)) !== 0,
+      reportMotion: (raw & 64) !== 0,
+      /** SGR encoding (?1006). The old X10 form cannot express a column past 223. */
+      sgr: (raw & 128) !== 0,
+      /** Wheel becomes arrow keys on the alternate screen (?1007). */
+      altScroll: (raw & 256) !== 0,
+    }
+  }
+
+  // ---- selection ----------------------------------------------------------
+  //
+  // The core owns it: a logical line runs across soft wraps, a word ends where
+  // the grid says it does, and a wide character is two columns but one
+  // character when copied. Tracking spans here would mean reimplementing all
+  // of that against a grid this side cannot see.
+
+  /** `mode` — 0 cell, 1 word, 2 line, 3 smart. */
+  selectionStart(line: number, col: number, mode: 0 | 1 | 2 | 3 = 0) {
+    wasm?.dp_term_selection_start(this.handle, line, col, mode)
+  }
+
+  selectionUpdate(line: number, col: number) {
+    wasm?.dp_term_selection_update(this.handle, line, col)
+  }
+
+  selectionClear() {
+    wasm?.dp_term_selection_clear(this.handle)
+  }
+
+  /** `[startLine, startCol, endLine, endCol]`, or null when nothing is selected. */
+  selectionSpan(): [number, number, number, number] | null {
+    if (!wasm) return null
+    const ok = wasm.dp_term_selection_span(this.handle, this.spanPtr)
+    if (!ok) return null
+    const v = new DataView(wasm.memory.buffer, this.spanPtr, 16)
+    return [v.getInt32(0, true), v.getInt32(4, true), v.getInt32(8, true), v.getInt32(12, true)]
+  }
+
+  selectionText(): string {
+    if (!wasm) return ""
+    const ptr = wasm.dp_term_selection_text(this.handle)
+    return ptr ? readCString(ptr) : ""
+  }
+
   linkAt(row: number, col: number): { url: string; startCol: number; endCol: number } | null {
     if (!wasm) return null
     const sPtr = wasm.dp_alloc(4)
@@ -205,10 +289,7 @@ export class Terminal {
     wasm.dp_free(sPtr, 4)
     wasm.dp_free(ePtr, 4)
 
-    const bytes = new Uint8Array(wasm.memory.buffer, ptr)
-    let end = 0
-    while (bytes[end] !== 0) end++
-    const url = new TextDecoder().decode(bytes.subarray(0, end))
+    const url = readCString(ptr)
     // A terminal will happily print `javascript:`; only hand the browser
     // things it makes sense to open from a click on remote output.
     if (!/^https?:\/\//i.test(url)) return null

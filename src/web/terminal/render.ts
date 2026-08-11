@@ -1,5 +1,5 @@
 import { cellSize, DEFAULT_FONT_SIZE, fontFor, gridFor } from "./metrics.ts"
-import { BACKGROUND, CURSOR, isDefaultBackground, resolve } from "./palette.ts"
+import { BACKGROUND, CURSOR, isDefaultBackground, resolve, SELECTION } from "./palette.ts"
 import { FLAG, type Terminal } from "./vt.ts"
 
 /**
@@ -50,6 +50,15 @@ export class Renderer {
     this.cellWidth = cell.width
     this.cellHeight = cell.height
     this.ascent = cell.ascent
+  }
+
+  /** Columns currently drawn, for turning a pixel into a cell. */
+  cols() {
+    return Math.max(1, Math.floor(this.canvas.width / this.dpr / this.cellWidth))
+  }
+
+  rows() {
+    return Math.max(1, Math.floor(this.canvas.height / this.dpr / this.cellHeight))
   }
 
   /**
@@ -203,6 +212,26 @@ export class Renderer {
           ctx.fillStyle = resolve(fg, true)
           ctx.fillRect(start * this.cellWidth, y + this.ascent * 0.6, (c - start) * this.cellWidth, 1)
         }
+      }
+    }
+
+    // Selection over the top of the row it covers. Drawn after the glyphs and
+    // as a translucent wash rather than by re-inking each cell: a selection
+    // that repainted text would have to know every colour rule above it, and
+    // would drift from them the first time one changed.
+    const span = term.selectionSpan()
+    if (span) {
+      const [sLine, sCol, eLine, eCol] = span
+      ctx.fillStyle = SELECTION
+      for (const r of rows) {
+        if (r >= screen.rows) continue
+        // Viewport rows are absolute content lines shifted by the offset.
+        const line = r - offset
+        if (line < sLine || line > eLine) continue
+        const from = line === sLine ? sCol : 0
+        const to = line === eLine ? eCol : screen.cols - 1
+        if (to < from) continue
+        ctx.fillRect(from * this.cellWidth, r * this.cellHeight, (to - from + 1) * this.cellWidth, this.cellHeight)
       }
     }
 
