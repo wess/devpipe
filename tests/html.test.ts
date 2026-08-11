@@ -60,3 +60,17 @@ describe("caching what has no hash in its name", () => {
     expect(body).toContain("etag")
   })
 })
+
+describe("waiting for the emulator", () => {
+  test("a terminal is not built before the wasm is in memory", async () => {
+    // `ready` was set and never read, so the workspace mounted straight into
+    // `new Terminal()` and threw "loadVt() must finish before a Terminal is
+    // created". It survived only because vt.wasm was served immutable and came
+    // back from cache with no round trip. Making it revalidate — which it had
+    // to, or a new emulator never reached anyone — widened the window and the
+    // race began losing every time.
+    const app = await Bun.file("src/web/app.tsx").text()
+    expect(app).toContain("<Workspace vtReady={ready} />")
+    expect(app).toMatch(/conn && activeSession && !vtReady/)
+  })
+})

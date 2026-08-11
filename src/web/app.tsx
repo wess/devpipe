@@ -313,7 +313,7 @@ const Reset: React.FC<{ token: string; onDone: (notice: string) => void }> = ({ 
 // The same shape as the iPad app, deliberately.
 // ---------------------------------------------------------------------------
 
-const Workspace: React.FC = () => {
+const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   const [boxes, setBoxes] = useState<api.Box[]>([])
   const [activeBox, setActiveBox] = useState<number | null>(null)
   const [sessions, setSessions] = useState<api.TerminalSession[]>([])
@@ -558,7 +558,22 @@ const Workspace: React.FC = () => {
             session is started from is exactly the space that session will
             occupy. */}
         <div className="pane" ref={paneRef}>
-          {conn && activeSession ? (
+          {conn && activeSession && !vtReady ? (
+            // The emulator has to be in memory before a Terminal exists. This
+            // used to be unguarded: `ready` was set and never read, so the view
+            // mounted straight into `new Terminal()` and threw "loadVt() must
+            // finish before a Terminal is created".
+            //
+            // It survived only because vt.wasm was served immutable and came
+            // back from cache with no round trip, so the race almost always
+            // won. Making the emulator revalidate — which it had to, or a new
+            // build never reached anyone — widened the window and it started
+            // losing every time: blank terminals on load, and a pane that
+            // stayed frozen while input still reached the box.
+            <div className="empty">
+              <Loader2 className="spin" size={20} />
+            </div>
+          ) : conn && activeSession ? (
             <TerminalView
               url={conn.url}
               token={conn.token}
@@ -969,7 +984,7 @@ const App: React.FC = () => {
           </button>
         </p>
       )}
-      {route.view === "workspace" && <Workspace />}
+      {route.view === "workspace" && <Workspace vtReady={ready} />}
       {route.view === "billing" && <Billing />}
       {route.view === "settings" && <Settings onSaved={setUser} />}
       {route.view === "admin" && <Admin tab={route.tab} onTab={tab => go({ view: "admin", tab })} />}
