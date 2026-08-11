@@ -1,0 +1,109 @@
+import { beforeEach, describe, expect, test } from "bun:test"
+import { boxFirewallSpec, BOX_FIREWALL_NAME, ensureBoxFirewall } from "../src/boxes/digitalocean.ts"
+
+/**
+ * The firewall a box is created behind.
+ *
+ * A box is a public droplet whose user has passwordless sudo and an agent that
+ * runs what it likes. What is reachable on it is not something to establish by
+ * reading the code once.
+ */
+
+const realFetch = globalThis.fetch
+const calls: { method: string; path: string; body: any }[] = []
+
+const stub = (firewalls: any[]) => {
+  globalThis.fetch = (async (input: any, init: any = {}) => {
+    const url = String(input)
+    const path = url.replace("https://api.digitalocean.com/v2", "")
+    calls.push({
+      method: init.method ?? "GET",
+      path,
+      body: init.body ? JSON.parse(init.body) : null,
+    })
+    if (path.startsWith("/firewalls?")) {
+      return new Response(JSON.stringify({ firewalls }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return new Response(JSON.stringify({ firewall: { id: "fw-new" } }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    })
+  }) as any
+}
+
+beforeEach(() => {
+  calls.length = 0
+  globalThis.fetch = realFetch
+})
+
+describe("what a box exposes to the internet", () => {
+  const spec = boxFirewallSpec("devpipe")
+  const inbound = spec.inbound_rules.map(r => r.ports)
+
+  test("only ssh, the acme challenge, and https", () => {
+    expect(inbound.sort()).toEqual(["22", "443", "80"])
+  })
+
+  test("the daemon's own port is not reachable", () => {
+    // devpiped binds 127.0.0.1:7788 and is only ever reached through Caddy.
+    // Opening it here would make DEVPIPE_INSECURE=1 — plain HTTP, correct
+    // over loopback — a plaintext service on the public internet.
+    expect(inbound).not.toContain("7788")
+  })
+
+  test("nothing a user or an agent starts is reachable by accident", () => {
+    // The failure this exists for: `docker run -p 5432:5432`, a dev server on
+    // 0.0.0.0:3000, `python -m http.server`. None of them are decisions to
+    // publish a service, and all of them did before this.
+    for (const port of ["3000", "5432", "6379", "8080", "all"]) {
+      expect(inbound).not.toContain(port)
+    }
+  })
+
+  test("a box can still reach out", () => {
+    // Egress has to stay open — the box exists to fetch packages, clone
+    // repositories and call APIs. Both protocols, because blocking UDP
+    // silently breaks DNS and everything looks like a network outage.
+    const protocols = spec.outbound_rules.map(r => r.protocol).sort()
+    expect(protocols).toEqual(["icmp", "tcp", "udp"])
+  })
+
+  test("it is attached by tag, so it covers boxes nobody remembered", () => {
+    expect(spec.tags).toEqual(["devpipe"])
+  })
+})
+
+describe("keeping the firewall the way it should be", () => {
+  test("creates it when the account has none", async () => {
+    stub([])
+    const id = await ensureBoxFirewall("token")
+    expect(id).toBe("fw-new")
+    const post = calls.find(c => c.method === "POST")
+    expect(post?.path).toBe("/firewalls")
+    expect(post?.body.name).toBe(BOX_FIREWALL_NAME)
+    globalThis.fetch = realFetch
+  })
+
+  test("puts an edited one back rather than leaving it", async () => {
+    // A rule opened by hand during an afternoon's debugging and never removed
+    // is the realistic way this protection disappears — not somebody deleting
+    // the firewall, which is loud.
+    stub([{ id: "fw-1", name: BOX_FIREWALL_NAME, inbound_rules: [{ protocol: "tcp", ports: "5432" }] }])
+    const id = await ensureBoxFirewall("token")
+    expect(id).toBe("fw-1")
+    const put = calls.find(c => c.method === "PUT")
+    expect(put?.path).toBe("/firewalls/fw-1")
+    expect(put?.body.inbound_rules.map((r: any) => r.ports).sort()).toEqual(["22", "443", "80"])
+    globalThis.fetch = realFetch
+  })
+
+  test("leaves a firewall that is not ours alone", async () => {
+    stub([{ id: "fw-other", name: "someone-elses", inbound_rules: [] }])
+    await ensureBoxFirewall("token")
+    expect(calls.find(c => c.path === "/firewalls/fw-other")).toBeUndefined()
+    globalThis.fetch = realFetch
+  })
+})

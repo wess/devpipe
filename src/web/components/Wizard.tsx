@@ -29,7 +29,9 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [billing, setBilling] = useState<api.BillingStatus | null>(null)
   const [step, setStep] = useState(0)
-  const [name, setName] = useState("My box")
+  // Empty rather than "My box". A prefilled name is a name nobody changes, and
+  // the server falls back to "box" if this is left alone anyway.
+  const [name, setName] = useState("")
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [region, setRegion] = useState("nyc3")
   const [size, setSize] = useState("")
@@ -152,9 +154,21 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
 
         {catalog && step === 0 && (
           <div className="wizard-body">
+            {/* Sat above the tool grid unlabelled, prefilled "My box", and
+                read as a heading rather than a decision — so every box got
+                called "My box". */}
             <label className="field">
-              <span>Name</span>
-              <input value={name} onChange={e => setName(e.target.value)} maxLength={40} />
+              <span>Name this box</span>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                maxLength={40}
+                placeholder="What you will call it in the sidebar"
+              />
+              <small className="muted">
+                Yours to read, not the network's. The address is built from your username — this never becomes a
+                hostname, a DNS record or part of a certificate.
+              </small>
             </label>
 
             {GROUPS.map(group => (
@@ -244,7 +258,10 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
           <div className="wizard-body">
             <dl className="summary">
               <dt>Name</dt>
-              <dd>{name}</dd>
+              {/* The server's own fallback, shown rather than left blank —
+                  the summary is the last chance to notice the box is about to
+                  be called "box". */}
+              <dd>{name.trim() || "box"}</dd>
               <dt>Size</dt>
               <dd>
                 {sizes.find(s => s.slug === size)?.label} · ${sizes.find(s => s.slug === size)?.monthly}/mo

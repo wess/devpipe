@@ -68,6 +68,34 @@ anywhere else — but it is long-lived, and the browser gets it from
   on a handshake, so it lands in that box's access log. That is why it is the
   box's credential and not the account's.
 
+### What is reachable on a box
+
+A DigitalOcean firewall named `devpipe-boxes`, attached by the `devpipe` tag, is
+converged on every provision by `ensureBoxFirewall` in
+`src/boxes/digitalocean.ts`. Inbound: **22, 80, 443 only**. Outbound:
+unrestricted.
+
+It is enforced by DigitalOcean rather than by the box, and that is the whole
+point of it. The box's user has `NOPASSWD:ALL` sudo — deliberately, it is their
+machine — and an agent on it runs whatever it decides to run. A firewall the box
+administers is a firewall the box can switch off, and Docker writes iptables
+rules that bypass `ufw` outright, so on the one tool most likely to publish a
+port a host firewall is not a control at all.
+
+What this closes: `docker run -p 5432:5432`, a dev server on `0.0.0.0:3000`,
+`python -m http.server`. None of those are decisions to publish a service on the
+public internet, and before the firewall all of them did. The catalogue's
+postgres and redis happen to bind loopback under Debian's defaults, but that is
+their default and not a property of the box.
+
+7788 is deliberately not in the list. `DEVPIPE_INSECURE=1` is plain HTTP, which
+is correct over loopback and would be a plaintext service anywhere else.
+
+`tests/boxes.test.ts` fails if a port is added to the inbound set, and if an
+existing firewall is left as found rather than converged — a rule opened by hand
+during an afternoon's debugging and never removed is how this protection
+realistically disappears.
+
 The same token authenticates the box's own callbacks to
 `/boxes/callback` and `/boxes/callback/log`, compared against the stored value
 for the hostname the callback names.

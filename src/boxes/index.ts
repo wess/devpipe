@@ -179,6 +179,17 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         }
 
         try {
+          // Before the droplet, not after: the firewall is attached by tag, so
+          // it has to exist by the time a droplet carrying that tag does.
+          // Creating the box first would leave it briefly reachable on every
+          // port while cloud-init runs as root — which is the window an
+          // opportunistic scanner is actually looking for.
+          //
+          // Inside the try deliberately. If this fails the box is marked failed
+          // and the subscription released; a box that could not be firewalled
+          // is not a box we should be handing to anyone.
+          await ocean.ensureBoxFirewall(token)
+
           const droplet = await ocean.createDroplet(token, {
             name: hostname,
             region,
