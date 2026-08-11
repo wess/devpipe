@@ -1,0 +1,63 @@
+# devpipe.com — the lander, and nothing else yet.
+#
+# Certificates are issued automatically over HTTP-01. That is the reason this
+# exists at all: iOS refuses a self-signed certificate before an app's pinning
+# code is ever consulted, so every box a client talks to needs a real one.
+# See docs/spikes.md.
+
+{
+	email wess@devpipe.com
+}
+
+devpipe.com, www.devpipe.com {
+	root * /var/www/devpipe
+	encode zstd gzip
+
+	# The daemon binary a new box downloads on first boot.
+	handle /dist/* {
+		file_server
+		header Cache-Control "public, max-age=300"
+	}
+
+	# Everything else is the app: the API, the web client, and the lander,
+	# which the web tier serves at the root itself.
+	handle {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	# Both processes behind this send the same set themselves, from
+	# src/security/headers.ts — keep the two in step. They are repeated here so
+	# that anything Caddy serves directly, /dist included, is covered too.
+	header {
+		# The web client connects a websocket straight to the user's own box,
+		# so connect-src has to allow the wildcard boxes live under. It also
+		# instantiates the terminal emulator from WebAssembly, which needs
+		# wasm-unsafe-eval — narrower than the unsafe-eval it would otherwise
+		# require.
+		#
+		# script-src has no 'unsafe-inline'. It used to, for one <script> block
+		# on the lander; that block is /lander.js now precisely so this can say
+		# no. The session token is in localStorage, so an injected script here
+		# is account takeover, and this directive is what stands in the way.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://*.devpipe.com https://*.devpipe.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src 'none'"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
+	@fonts path /fonts/*
+	header @fonts Cache-Control "public, max-age=31536000, immutable"
+}
+
+# No block for *.devpipe.com on purpose. A wildcard certificate can only be
+# issued over DNS-01, which needs a Caddy built with the DigitalOcean DNS
+# plugin; naming the wildcard here without it puts Caddy into a retry loop
+# against Let's Encrypt forever.
+#
+# The wildcard A record still points here, which is what we want: each user's
+# box will get its own subdomain and its own HTTP-01 certificate when it is
+# provisioned, and that record is the fallback until it is.

@@ -1,0 +1,5 @@
+CREATE TABLE waitlist (
+  id         SERIAL PRIMARY KEY,
+  email      TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

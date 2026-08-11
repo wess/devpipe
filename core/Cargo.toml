@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "devpipecore"
+version = "0.1.0"
+edition = "2024"
+description = "C ABI over sinclair's VT emulator, for the Devpipe iPad client"
+
+# staticlib links into the iOS app bundle, cdylib produces the .wasm the web
+# client loads, and rlib lets the tests use the Rust API directly without
+# going through the C layer. All three come from the same source, which is the
+# point: the browser and the iPad run the same terminal emulator rather than
+# two implementations that drift.
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+# Sinclair's terminal core, unmodified and gpui-free. Path dep for the spike:
+# it means devpipe does not build without sinclair beside it, which is a
+# problem to solve (submodule or published crate) before this is more than a
+# spike.
+vt = { path = "../../sinclair/crates/vt" }

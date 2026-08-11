@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>Devpipe</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.wess.devpipe</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Devpipe</string>
+  <key>CFBundleDisplayName</key>
+  <string>Devpipe</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+  <key>MinimumOSVersion</key>
+  <string>17.0</string>
+  <!-- An empty dict is the modern "I have no launch storyboard" declaration.
+       Omitting it, or filling it with keys that resolve to nothing, drops the
+       app into scaled compatibility mode — which on an iPad renders every
+       point at ~2.5x and makes an 106-column terminal report 35 columns. -->
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+  </array>
+  <!-- 1 = iPhone, 2 = iPad. Without this the bundle is iPhone-only and an
+       iPad runs it in scaled compatibility mode, where every point is ~2.5x
+       and a 106-column terminal measures 35 columns. -->
+  <key>UIDeviceFamily</key>
+  <array>
+    <integer>1</integer>
+    <integer>2</integer>
+  </array>
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <!-- No ATS exceptions, and none needed.
+       Every box now has its own name under devpipe.com and a CA-issued
+       certificate from Let's Encrypt, so system trust passes on its own. That
+       is the whole reason for the DNS-and-ACME arrangement: ATS evaluates
+       trust *before* an app's pinning code is consulted and cancels on
+       failure, so a self-signed certificate could never have been rescued by
+       pinning however strict the pin — and per-domain exceptions were
+       impossible because box addresses are not known when the app is built. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Connect to a Devpipe daemon on your network.</string>
+</dict>
+</plist>

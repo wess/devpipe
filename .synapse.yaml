@@ -1,0 +1,9 @@
+# Credentials this project may receive. Names only — values live in the
+# macOS Keychain and never appear here or in git.
+#
+# Used for provisioning the droplets the daemon runs on.
+version: 1
+scope: project
+env:
+  DIGITAL_OCEAN_API: apis.DigitalOcean
+deny: []
