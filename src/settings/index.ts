@@ -19,6 +19,8 @@ export const SETTING = {
   daemonUrl: "daemon_url",
   sshKeyIds: "boxes_ssh_key_ids",
   billingMarginPct: "billing_margin_pct",
+  /** Gigabytes a box may send in an hour before it is worth a look. */
+  egressLimitGb: "boxes_egress_limit_gb",
 } as const
 
 const DEFAULTS: Record<string, string> = {
@@ -27,6 +29,9 @@ const DEFAULTS: Record<string, string> = {
   [SETTING.defaultRegion]: "nyc3",
   [SETTING.defaultSize]: "s-1vcpu-512mb-10gb",
   [SETTING.boxLimitPerUser]: "3",
+  // Roughly a gigabit link held for an hour. Nothing a developer does by
+  // accident, and well under what a seedbox does deliberately.
+  [SETTING.egressLimitGb]: "200",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.sshKeyIds]: "",
   // A percentage on top of what the provider charges. 100 means the customer

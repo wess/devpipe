@@ -242,3 +242,39 @@ export const listSshKeys = async (token: string) => {
   const body: any = await request(token, "/account/keys")
   return (body?.ssh_keys ?? []).map((k: any) => ({ id: k.id, name: k.name }))
 }
+
+// ---- bandwidth --------------------------------------------------------------
+
+/**
+ * Outbound public bandwidth for a droplet, as an average over the window.
+ *
+ * The only measurement here that bounds abuse rather than inconveniencing it.
+ * The apt pin and the closed mail ports are friction: they raise the cost of
+ * the obvious thing and stop nobody who tries twice. Volume is different — a
+ * box that has pushed hundreds of gigabytes is a seedbox or a mirror whatever
+ * software it used to do it, and that is a judgement the control plane can make
+ * without ever looking at what runs on the box.
+ *
+ * Returns megabits per second averaged across the samples, and `null` when
+ * DigitalOcean has no data — a droplet created minutes ago has none, and a
+ * missing reading must never read as a quiet box.
+ */
+export const outboundMbps = async (token: string, dropletId: string, windowSeconds = 3600): Promise<number | null> => {
+  const end = Math.floor(Date.now() / 1000)
+  const start = end - windowSeconds
+  const query = new URLSearchParams({
+    host_id: dropletId,
+    interface: "public",
+    direction: "outbound",
+    start: String(start),
+    end: String(end),
+  })
+  const body: any = await request(token, `/monitoring/metrics/droplet/bandwidth?${query}`)
+  const values: [number, string][] = body?.data?.result?.[0]?.values ?? []
+  if (values.length === 0) return null
+  const total = values.reduce((sum, [, value]) => sum + Number(value), 0)
+  return total / values.length
+}
+
+/** Megabits per second to gigabytes over the same window. */
+export const gigabytesOver = (mbps: number, windowSeconds: number): number => (mbps * windowSeconds) / 8 / 1000

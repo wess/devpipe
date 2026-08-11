@@ -7,10 +7,11 @@ import { authRoutes } from "./auth/index.ts"
 import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
 import { billingRoutes } from "./billing/index.ts"
-import { boxRoutes } from "./boxes/index.ts"
+import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
 import { claimRoutes } from "./claims/index.ts"
 import { createEmailer } from "./email/index.ts"
+import { watchEgress } from "./security/egress.ts"
 import { securityHeaders } from "./security/headers.ts"
 import { sweepRateLimits } from "./security/ratelimit.ts"
 import { terminalRoutes } from "./terminals/index.ts"
@@ -154,9 +155,34 @@ const sweeper = setInterval(() => {
 }, 600_000)
 sweeper.unref()
 
+// The box firewall, put back the way it should be.
+//
+// It is attached by tag and converged when a box is provisioned, which covers
+// new boxes and leaves every existing one on whatever rules it was created
+// under. That is how closing outbound mail ended up being applied by hand to a
+// running box. Hourly, and once at startup, so a deploy is enough to roll a
+// rule change out to machines nobody is touching.
+void convergeFirewall(db)
+const firewall = setInterval(() => void convergeFirewall(db), 3_600_000)
+firewall.unref()
+
+// What is actually leaving each box.
+//
+// The apt pin and the closed mail ports raise the cost of the obvious thing and
+// bound nothing. Volume bounds it, needs no opinion about what ran on the box,
+// and the provider is already measuring it. This only records and warns —
+// a busy build and a seedbox look alike for an hour, and locking a paying
+// customer out on an hour of traffic is the worse mistake.
+const egress = setInterval(() => {
+  void watchEgress(db).catch(err => console.error("[devpipe] egress watch:", err))
+}, 3_600_000)
+egress.unref()
+
 const shutdown = async (signal: string) => {
   try {
     clearInterval(sweeper)
+    clearInterval(firewall)
+    clearInterval(egress)
     await server.stop(false)
     await db.close()
   } catch (err) {

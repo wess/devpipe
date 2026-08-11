@@ -104,9 +104,17 @@ arriving at the provider account every customer's box is created under — where
 the remedy is to lock the account and one person's torrenting costs everyone
 their machine. The same reasoning as the mail block, one layer up.
 
-What would actually bound this is egress volume, which nothing measures yet.
-Droplets are created with `monitoring: true`, so the bandwidth figures exist and
-are unread.
+What bounds it is egress volume, which `src/security/egress.ts` now reads
+hourly from the provider's own metrics — no opinion about what ran on the box,
+which matters, because inspecting a customer's terminal is not something this
+product does. A box over `boxes_egress_limit_gb` (200GB/hour by default, about a
+gigabit held for the hour) is written to the audit trail and warned about.
+
+It deliberately does not suspend. A busy build, a large dataset, a registry push
+and a seedbox look alike for an hour, and locking a paying customer out of their
+machine on an hour of traffic is a worse failure than the one it prevents. What
+it buys is that when a complaint arrives naming an address and a time, the
+account is already written down.
 
 What the firewall closes: `docker run -p 5432:5432`, a dev server on
 `0.0.0.0:3000`, `python -m http.server`. None of those are decisions to publish a service on the

@@ -13,6 +13,27 @@ devpipe.com, www.devpipe.com {
 	root * /var/www/devpipe
 	encode zstd gzip
 
+	# Who asked for what, and when.
+	#
+	# There was no request log at all, which is how a terminal session that
+	# nobody remembers creating became unanswerable: the daemon refuses to
+	# attach to a session it does not have, so it had to have come from a real
+	# POST, and there was nothing left to say whose or when. A box costs money
+	# from the moment it exists and a session spawns a process, so "what
+	# actually asked for this" is not a question to be unable to answer.
+	#
+	# Rolled and capped, because a log that fills the disk takes the control
+	# plane down with it. Bodies are never recorded — only the line, the
+	# status, and the address.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 32MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+	}
+
 	# The daemon binary a new box downloads on first boot.
 	handle /dist/* {
 		file_server

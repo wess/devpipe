@@ -36,6 +36,30 @@ const safeTools = (manifest: string): string[] => {
   }
 }
 
+/**
+ * Puts the box firewall back the way it should be, on a timer.
+ *
+ * `ensureBoxFirewall` runs during provisioning, which covers a new box and
+ * nothing else: a change to the rules reaches boxes that already exist only
+ * when somebody happens to create another one. Closing outbound mail had to be
+ * applied by hand to a running box for exactly that reason, and a control that
+ * needs someone to remember it is not a control.
+ *
+ * Quiet when there is no provider configured, because an instance that sells
+ * nothing has no boxes to protect and should not log about it hourly.
+ */
+export const convergeFirewall = async (db: Connection): Promise<boolean> => {
+  const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+  if (!token) return false
+  try {
+    await ocean.ensureBoxFirewall(token)
+    return true
+  } catch (err) {
+    console.error("[devpipe] could not converge the box firewall:", err)
+    return false
+  }
+}
+
 export const boxRoutes = (db: Connection, appUrl: string) => {
   const authed = pipeline(requireAuth({ db }))
 
