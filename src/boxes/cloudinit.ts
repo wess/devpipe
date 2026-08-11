@@ -114,7 +114,10 @@ SHIPPER=$!
 phase "system" "Preparing the system"
 say "Host ${opts.hostname}"
 apt-get update -qq
-apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https
+# unzip is here because bun's installer needs it and says so only after the
+# download: "error: unzip is required to install bun". The Debian image does
+# not carry it, so bun failed on every box while every other tool succeeded.
+apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https unzip
 say "[ok] base packages"
 
 phase "user" "Creating your account on the box"
@@ -149,6 +152,14 @@ cat > /etc/devpipe/env <<'ENVEOF'
 DEVPIPE_ADDR=127.0.0.1:7788
 DEVPIPE_TOKEN=${opts.agentToken}
 DEVPIPE_INSECURE=1
+# The daemon execs a tool by name — "claude", "codex" — so it needs the
+# directories the installers actually write to. /etc/profile.d/devpipe-path.sh
+# does not reach it: that is sourced by login shells, and the daemon is a
+# systemd service with the unit default PATH. Every tool installed into $HOME
+# was therefore present on the box and unreachable from the button that starts
+# it, while opening a shell and typing the same name worked — which is what
+# made it look like a network fault rather than a missing PATH.
+PATH=/home/devpipe/.local/bin:/home/devpipe/.bun/bin:/home/devpipe/.cargo/bin:/home/devpipe/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENVEOF
 chmod 0600 /etc/devpipe/env
 

@@ -23,6 +23,22 @@ const boxFor = async (db: Connection, userId: number, id: number) =>
       .where(q => q("destroyed_at").isNull()),
   )) as any
 
+/**
+ * A box that answered, and refused.
+ *
+ * Distinct from a box that could not be reached, because the two need
+ * different words: one is a network problem the user waits out, the other is
+ * an answer they can act on.
+ */
+class BoxRefused extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 const callBox = async (box: any, path: string, init: RequestInit = {}) => {
   const res = await fetch(`https://${box.hostname}${path}`, {
     ...init,
@@ -34,7 +50,19 @@ const callBox = async (box: any, path: string, init: RequestInit = {}) => {
     signal: AbortSignal.timeout(12_000),
   })
   if (res.status === 204) return null
-  return res.json()
+
+  // Read as text first. The daemon reports its errors in plain text, and
+  // `res.json()` on those threw a SyntaxError that the callers could only
+  // report as "that box is not answering" — so a box that had said exactly
+  // what was wrong ("No such file or directory (os error 2)", from a tool that
+  // was installed but not on the daemon's PATH) was indistinguishable from a
+  // box that was switched off. The diagnosis was in the response the whole
+  // time, and this is the line that was throwing it away.
+  const text = await res.text()
+  if (!res.ok) {
+    throw new BoxRefused(res.status, text.trim().slice(0, 300) || `The box returned ${res.status}.`)
+  }
+  return text ? JSON.parse(text) : null
 }
 
 /**
@@ -47,7 +75,14 @@ const callBox = async (box: any, path: string, init: RequestInit = {}) => {
  * box that is genuinely down. The journal is where that difference belongs.
  */
 const notAnswering = (c: Conn, box: { hostname: string }, path: string, err: unknown) => {
-  console.error(`[devpipe] box ${box.hostname} did not answer ${path}:`, err)
+  console.error(`[devpipe] box ${box.hostname} failed ${path}:`, err)
+  // What the box said, when it said anything. "That box is not answering" is
+  // the right sentence for a box that is unreachable and the wrong one for a
+  // box that answered with a reason — it sends someone to check the network
+  // over a tool that is not installed.
+  if (err instanceof BoxRefused) {
+    return json(c, 502, { error: `The box could not do that: ${err.message}` })
+  }
   return json(c, 502, { error: "That box is not answering." })
 }
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test"
+import { cloudInit } from "../src/boxes/cloudinit.ts"
 import { boxFirewallSpec, BOX_FIREWALL_NAME, ensureBoxFirewall } from "../src/boxes/digitalocean.ts"
 
 /**
@@ -105,5 +106,36 @@ describe("keeping the firewall the way it should be", () => {
     await ensureBoxFirewall("token")
     expect(calls.find(c => c.path === "/firewalls/fw-other")).toBeUndefined()
     globalThis.fetch = realFetch
+  })
+})
+
+describe("what a box is built with", () => {
+  const script = cloudInit({
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["bun", "claude-code"],
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    callbackSecret: "secret",
+  })
+
+  test("the daemon can find tools installed into the user's home", () => {
+    // The daemon execs a tool by name, and profile.d only reaches login
+    // shells. Without this every tool was installed and unreachable from the
+    // button that starts it, while typing the same name in a shell worked.
+    const env = script.slice(script.indexOf("cat > /etc/devpipe/env"))
+    expect(env).toMatch(/^PATH=.*\.local\/bin/m)
+    for (const dir of [".local/bin", ".bun/bin", ".cargo/bin"]) {
+      expect(env).toContain(`/home/devpipe/${dir}`)
+    }
+  })
+
+  test("unzip is installed before anything needs it", () => {
+    // bun's installer requires it and only says so after downloading:
+    // "error: unzip is required to install bun". The image has no unzip, so
+    // bun failed on every box while every other tool succeeded.
+    const base = script.slice(0, script.indexOf("phase \"user\""))
+    expect(base).toMatch(/apt-get install .*unzip/)
   })
 })
