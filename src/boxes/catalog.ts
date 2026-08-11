@@ -75,6 +75,34 @@ export const CATALOG: readonly Tool[] = [
     credentials: [".codex/auth.json"],
   },
   {
+    id: "hermes",
+    runAs: "devpipe",
+    name: "Hermes",
+    summary: "Nous Research's agent. Sign in with your own account.",
+    group: "agent",
+    memoryMb: 400,
+    install: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    // Verified against `hermes --help` on a box: "Bypass all dangerous command
+    // approval prompts".
+    launch: ["hermes", "--yolo"],
+    credentials: [".hermes/auth.json", ".hermes/config.json"],
+  },
+  {
+    id: "openclaw",
+    runAs: "root",
+    name: "OpenClaw",
+    summary: "Multi-channel assistant. Approvals are configured, not a flag.",
+    group: "agent",
+    memoryMb: 400,
+    requires: ["node"],
+    install: "npm install -g openclaw@latest",
+    // No auto-approve switch: OpenClaw isolates work in sandbox containers and
+    // approves inbound over a `pairing` subcommand. Started plainly rather than
+    // with a flag invented for it — see `openclaw sandbox --help`.
+    launch: ["openclaw"],
+    credentials: [".openclaw/config.json"],
+  },
+  {
     id: "opencode",
     runAs: "devpipe",
     name: "OpenCode",
