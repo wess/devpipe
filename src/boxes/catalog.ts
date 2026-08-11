@@ -281,6 +281,17 @@ export const CATALOG: readonly Tool[] = [
   },
 ]
 
+/**
+ * Files that carry the account's Synapse configuration to a box.
+ *
+ * Not a tool — nothing installs it — but it travels the same path as an agent
+ * login for the same reason: the server, the token and the key its envelopes are
+ * sealed with belong to the person, not the machine, and must not go through
+ * cloud-init, which the provider keeps and serves to anything on the box that
+ * can reach the metadata service.
+ */
+export const SYNAPSE_FILES = [".config/synapse/sync.json"] as const
+
 export const byId = (id: string): Tool | undefined => CATALOG.find(t => t.id === id)
 
 export const defaults = (): string[] => CATALOG.filter(t => t.defaultOn).map(t => t.id)

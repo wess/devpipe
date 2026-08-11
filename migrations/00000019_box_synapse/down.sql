@@ -1,0 +1,1 @@
+ALTER TABLE boxes DROP COLUMN synapse;

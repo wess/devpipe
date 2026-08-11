@@ -9,7 +9,7 @@ import { audit } from "../util/audit.ts"
 import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
-import { CATALOG, defaults, fits, REGIONS, resolve, SIZES } from "./catalog.ts"
+import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
 import * as ocean from "./digitalocean.ts"
 
@@ -23,6 +23,7 @@ const publicBox = (row: any) => ({
   status_detail: row.status_detail,
   ip: row.ip,
   shell: row.shell ?? "bash",
+  synapse: Boolean(row.synapse),
   tools: safeTools(row.manifest),
   created_at: row.created_at,
   ready_at: row.ready_at,
@@ -135,7 +136,14 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
       "/boxes",
       createBox(async c => {
         const me = currentUser(c)
-        const b = c.body as { name?: string; region?: string; size?: string; tools?: string[]; shell?: string }
+        const b = c.body as {
+          name?: string
+          region?: string
+          size?: string
+          tools?: string[]
+          shell?: string
+          synapse?: boolean
+        }
 
         const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
         if (!token) {
@@ -197,6 +205,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               name,
               hostname,
               shell,
+              synapse: b.synapse ? 1 : 0,
               region,
               size,
               status: "creating",
@@ -246,6 +255,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               loginsUrl: `${appUrl}/api/boxes/callback/logins`,
               callbackSecret: agentToken,
               shell,
+              synapse: Boolean(b.synapse),
             }),
             // Without a key nobody can get onto a box that wedges during
             // setup — the first real provisioning run hung and there was no
@@ -402,7 +412,10 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // Only paths the catalogue names. Without this a box could ask the
         // control plane to keep any file it liked, which is a storage service
         // with no quota rather than a login.
-        const known = CATALOG.some(t => t.id === tool && (t.credentials ?? []).includes(path))
+        const known =
+          CATALOG.some(t => t.id === tool && (t.credentials ?? []).includes(path)) ||
+          // The account's Synapse configuration rides the same encrypted path.
+          (tool === "synapse" && (SYNAPSE_FILES as readonly string[]).includes(path))
         if (!known) return json(c, 422, { error: "not a login file" })
         if (content.length > 256_000) return json(c, 413, { error: "too large" })
 

@@ -32,6 +32,8 @@ export const cloudInit = (opts: {
   callbackSecret: string
   /** Login shell for the box's user. Bash when unset. */
   shell?: string
+  /** Whether this box carries the account's Synapse memory. */
+  synapse?: boolean
 }): string => {
   const steps = resolve(opts.tools)
   // Only the logins for tools this box actually has. A watcher on a path that
@@ -346,6 +348,22 @@ systemctl enable --now devpipe-login-${i}.path >/dev/null 2>&1 || true`,
   )
   .join("\n")}
 say "[ok] logins will follow you to your next box"
+${
+  opts.synapse
+    ? `
+phase "synapse" "Bringing your project memory"
+# The same encrypted path the agent logins came down. Synapse then carries the
+# decisions and conventions this account has already recorded, so an agent on a
+# box that was created ninety seconds ago starts knowing what one on the laptop
+# knows — which is the whole reason to want it here rather than a second, empty
+# store per box.
+if [ -f /home/devpipe/.config/synapse/sync.json ]; then
+  say "[ok] project memory is configured"
+else
+  say "no Synapse configuration stored yet — set one up and the next box will have it"
+fi`
+    : ""
+}
 
 phase "dns" "Waiting for this box's name to resolve"
 # Caddy asks Let's Encrypt over HTTP-01, which only works once the name points

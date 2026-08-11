@@ -200,3 +200,51 @@ describe("what a box will install", () => {
     expect(patterns).not.toContain("*\n")
   })
 })
+
+describe("carrying project memory to a box", () => {
+  test("the option reaches cloud-init, and is off unless asked for", () => {
+    const withMemory = cloudInit({
+      hostname: "b.example.com",
+      agentToken: "tok",
+      tools: ["claude-code"],
+      daemonUrl: "https://example.com/devpiped",
+      callbackUrl: "https://example.com/cb",
+      logUrl: "https://example.com/cb/log",
+      loginsUrl: "https://example.com/cb/logins",
+      callbackSecret: "secret",
+      synapse: true,
+    })
+    const without = cloudInit({
+      hostname: "b.example.com",
+      agentToken: "tok",
+      tools: ["claude-code"],
+      daemonUrl: "https://example.com/devpiped",
+      callbackUrl: "https://example.com/cb",
+      logUrl: "https://example.com/cb/log",
+      loginsUrl: "https://example.com/cb/logins",
+      callbackSecret: "secret",
+    })
+    expect(withMemory).toContain("Bringing your project memory")
+    // Off by default. Memory is the account's, and a box that quietly carried
+    // it because someone forgot to say no is the wrong way round.
+    expect(without).not.toContain("Bringing your project memory")
+  })
+
+  test("the configuration never travels in cloud-init", () => {
+    // Provider user data is retained and served to anything on the box that can
+    // reach the metadata service. The server, the token and the key its
+    // envelopes are sealed with go down the encrypted login path instead.
+    const script = cloudInit({
+      hostname: "b.example.com",
+      agentToken: "tok",
+      tools: ["claude-code"],
+      daemonUrl: "https://example.com/devpiped",
+      callbackUrl: "https://example.com/cb",
+      logUrl: "https://example.com/cb/log",
+      loginsUrl: "https://example.com/cb/logins",
+      callbackSecret: "secret",
+      synapse: true,
+    })
+    expect(script).not.toMatch(/sync\.key|sync\.token/)
+  })
+})

@@ -38,6 +38,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const [name, setName] = useState("")
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [shell, setShell] = useState<ShellName>("bash")
+  const [synapse, setSynapse] = useState(false)
   const [region, setRegion] = useState("nyc3")
   const [size, setSize] = useState("")
   const [busy, setBusy] = useState(false)
@@ -109,7 +110,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
     setBusy(true)
     setError(null)
     try {
-      const box = await api.createBox({ name, region, size, shell, tools: [...picked] })
+      const box = await api.createBox({ name, region, size, shell, synapse, tools: [...picked] })
       onCreated(box.id)
     } catch (e: any) {
       // 402 means the subscription this size needs is missing or was taken by
@@ -262,6 +263,22 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               ))}
             </div>
 
+            <h3>Project memory</h3>
+            <p className="muted small">
+              Synapse carries the decisions and conventions you have already recorded, so an agent here starts knowing
+              what one on your laptop knows.
+            </p>
+            <div className="choice-grid">
+              <button type="button" className={`choice ${synapse ? "" : "on"}`} onClick={() => setSynapse(false)}>
+                <strong>This box only</strong>
+                <span className="muted small">Nothing leaves the machine</span>
+              </button>
+              <button type="button" className={`choice ${synapse ? "on" : ""}`} onClick={() => setSynapse(true)}>
+                <strong>Share with Synapse</strong>
+                <span className="muted small">Needs Synapse set up on your account</span>
+              </button>
+            </div>
+
             <h3>Region</h3>
             <p className="muted small">Pick the one nearest you — it is the round trip you feel.</p>
             <div className="choice-grid">
@@ -293,6 +310,8 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               </dd>
               <dt>Shell</dt>
               <dd>{SHELLS[shell].label}</dd>
+              <dt>Memory</dt>
+              <dd>{synapse ? "Synapse, shared with your other machines" : "This box only"}</dd>
               <dt>Region</dt>
               <dd>{catalog.regions.find(r => r.slug === region)?.label}</dd>
               <dt>Installing</dt>

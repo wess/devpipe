@@ -18,6 +18,7 @@ export type Box = {
   status_detail: string
   ip: string
   shell: string
+  synapse: boolean
   tools: string[]
   created_at: string
   ready_at: string | null
@@ -190,8 +191,14 @@ export const revokeOtherSessions = () => call("DELETE", "/sessions")
 
 export const catalog = () => call<Catalog>("GET", "/boxes/catalog")
 export const listBoxes = () => call<Box[]>("GET", "/boxes")
-export const createBox = (input: { name: string; region: string; size: string; shell: string; tools: string[] }) =>
-  call<{ id: number; hostname: string; status: string }>("POST", "/boxes", input)
+export const createBox = (input: {
+  name: string
+  region: string
+  size: string
+  shell: string
+  synapse: boolean
+  tools: string[]
+}) => call<{ id: number; hostname: string; status: string }>("POST", "/boxes", input)
 export const destroyBox = (id: number) => call("DELETE", `/boxes/${id}`)
 
 export const boxSessions = (id: number) => call<TerminalSession[]>("GET", `/boxes/${id}/sessions`)
