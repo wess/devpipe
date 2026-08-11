@@ -22,15 +22,13 @@ devpipe.com, www.devpipe.com {
 	# from the moment it exists and a session spawns a process, so "what
 	# actually asked for this" is not a question to be unable to answer.
 	#
-	# Rolled and capped, because a log that fills the disk takes the control
-	# plane down with it. Bodies are never recorded — only the line, the
-	# status, and the address.
+	# To journald rather than a file. The packaged unit is hardened and cannot
+	# write under /var/log — pointing it at a file there does not degrade to
+	# console logging, it refuses to start, which takes the whole site down
+	# with it. journald already rotates and caps, and `journalctl -u caddy` is
+	# where anyone would look first anyway. Bodies are never recorded: only the
+	# line, the status, and the address.
 	log {
-		output file /var/log/caddy/access.log {
-			roll_size 32MiB
-			roll_keep 5
-			roll_keep_for 336h
-		}
 		format json
 	}
 

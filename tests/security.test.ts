@@ -349,3 +349,14 @@ describe("the content security policy", () => {
     )
   })
 })
+
+describe("the access log", () => {
+  test("goes to journald rather than a file", async () => {
+    // Pointing Caddy at a file under /var/log does not degrade to console
+    // logging — the packaged unit is hardened, cannot open it, and refuses to
+    // start. That takes the whole site down, which is exactly what it did.
+    const caddyfile = await Bun.file("site/Caddyfile").text()
+    expect(caddyfile).toContain("log {")
+    expect(caddyfile).not.toContain("output file")
+  })
+})
