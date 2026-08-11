@@ -1,3 +1,4 @@
+import { cellSize, DEFAULT_FONT_SIZE, fontFor, gridFor } from "./metrics.ts"
 import { BACKGROUND, CURSOR, isDefaultBackground, resolve } from "./palette.ts"
 import { FLAG, type Terminal } from "./vt.ts"
 
@@ -25,7 +26,7 @@ export class Renderer {
   constructor(
     private canvas: HTMLCanvasElement,
     private term: () => Terminal | null,
-    fontSize = 13,
+    fontSize = DEFAULT_FONT_SIZE,
   ) {
     const ctx = canvas.getContext("2d", { alpha: false })
     if (!ctx) throw new Error("This browser has no 2D canvas.")
@@ -41,25 +42,24 @@ export class Renderer {
   }
 
   private font(bold: boolean, italic: boolean) {
-    return `${italic ? "italic " : ""}${bold ? "600 " : "400 "}${this.fontSize}px ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, monospace`
+    return fontFor(this.fontSize, bold, italic)
   }
 
   private measure() {
-    this.ctx.font = this.font(false, false)
-    const m = this.ctx.measureText("M")
-    // Round to whole pixels: fractional advances accumulate across eighty
-    // columns into visible drift between a character and its background.
-    this.cellWidth = Math.max(1, Math.round(m.width))
-    this.cellHeight = Math.max(1, Math.round(this.fontSize * 1.5))
-    this.ascent = Math.round(this.fontSize * 1.12)
+    const cell = cellSize(this.fontSize)
+    this.cellWidth = cell.width
+    this.cellHeight = cell.height
+    this.ascent = cell.ascent
   }
 
-  /** Grid size for the element's current size. */
+  /**
+   * Grid size for the element's current size.
+   *
+   * Shared with the code that creates the pty, so a session is born the size it
+   * will be drawn at — see metrics.ts.
+   */
   gridFor(width: number, height: number) {
-    return {
-      cols: Math.max(20, Math.floor(width / this.cellWidth)),
-      rows: Math.max(5, Math.floor(height / this.cellHeight)),
-    }
+    return gridFor(width, height, this.fontSize)
   }
 
   resizeCanvas(width: number, height: number) {

@@ -23,6 +23,7 @@ import { Settings } from "./components/Settings.tsx"
 import { TerminalView } from "./components/TerminalView.tsx"
 import { Wizard } from "./components/Wizard.tsx"
 import { href, type Route, useRoute, WORKSPACE_PATH } from "./routes.ts"
+import { gridFor } from "./terminal/metrics.ts"
 import { loadVt } from "./terminal/vt.ts"
 
 // ---------------------------------------------------------------------------
@@ -323,6 +324,14 @@ const Workspace: React.FC = () => {
   const [destroying, setDestroying] = useState<api.Box | null>(null)
   const [busy, setBusy] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // The box a terminal will be drawn into, measured before one exists: the
+  // empty state it replaces occupies exactly the same space.
+  const paneRef = useRef<HTMLDivElement>(null)
+  // Read from a resize callback that must not change identity — see
+  // TerminalView, which holds its callbacks in refs so a new function does not
+  // reconnect the socket.
+  const activeSessionRef = useRef<string | null>(null)
+  activeSessionRef.current = activeSession
 
   const refreshBoxes = useCallback(async () => {
     try {
@@ -373,7 +382,16 @@ const Workspace: React.FC = () => {
   const newTerminal = async (argv: string[]) => {
     if (!box) return
     try {
-      const created = await api.createTerminal(box.id, argv, 100, 30)
+      // The pty is created at the size it will be displayed at.
+      //
+      // It used to be created at a fixed 100×30 and resized once the client
+      // attached. By then the program had already drawn its first screen —
+      // banners, box drawing, column layout — for a terminal a third the width
+      // of the real one, and that output is in the scrollback for good. The
+      // resize only ever fixed the *next* screen.
+      const pane = paneRef.current?.getBoundingClientRect()
+      const { cols, rows } = pane ? gridFor(pane.width, pane.height) : { cols: 100, rows: 30 }
+      const created = await api.createTerminal(box.id, argv, cols, rows)
       const list = await api.boxSessions(box.id)
       setSessions(list)
       setActiveSession(created.id)
@@ -381,6 +399,13 @@ const Workspace: React.FC = () => {
       setError(String(e.message))
     }
   }
+
+  // The daemon reports the size a session was created with, and the list is
+  // read once at creation. Without this the sidebar keeps showing that first
+  // number for the life of the session, however much the window has changed.
+  const onTerminalResize = useCallback((cols: number, rows: number) => {
+    setSessions(list => list.map(s => (s.id === activeSessionRef.current ? { ...s, cols, rows } : s)))
+  }, [])
 
   const closeTerminal = async (sid: string) => {
     if (!box) return
@@ -503,33 +528,45 @@ const Workspace: React.FC = () => {
           </p>
         )}
 
-        {conn && activeSession ? (
-          <TerminalView url={conn.url} token={conn.token} sessionId={activeSession} onStatus={setStatus} />
-        ) : box && box.status !== "ready" ? (
-          // A box that is still building gets the whole pane. It is the only
-          // thing happening, and it is the thing the user is waiting on.
-          <BoxSetup boxId={box.id} status={box.status} />
-        ) : (
-          <div className="empty">
-            {box?.status === "ready" ? (
-              <>
-                <TerminalIcon size={28} />
-                <p>Open a terminal to get started.</p>
-                <button type="button" onClick={() => newTerminal(["claude"])}>
-                  Start Claude Code
-                </button>
-              </>
-            ) : (
-              <>
-                <Server size={28} />
-                <p>You do not have a box yet.</p>
-                <button type="button" onClick={() => setWizard(true)}>
-                  Set one up
-                </button>
-              </>
-            )}
-          </div>
-        )}
+        {/* Every state of the pane shares this box, which is what makes it
+            safe to measure before a terminal is in it: the empty state a new
+            session is started from is exactly the space that session will
+            occupy. */}
+        <div className="pane" ref={paneRef}>
+          {conn && activeSession ? (
+            <TerminalView
+              url={conn.url}
+              token={conn.token}
+              sessionId={activeSession}
+              onStatus={setStatus}
+              onResize={onTerminalResize}
+            />
+          ) : box && box.status !== "ready" ? (
+            // A box that is still building gets the whole pane. It is the only
+            // thing happening, and it is the thing the user is waiting on.
+            <BoxSetup boxId={box.id} status={box.status} />
+          ) : (
+            <div className="empty">
+              {box?.status === "ready" ? (
+                <>
+                  <TerminalIcon size={28} />
+                  <p>Open a terminal to get started.</p>
+                  <button type="button" onClick={() => newTerminal(["claude"])}>
+                    Start Claude Code
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Server size={28} />
+                  <p>You do not have a box yet.</p>
+                  <button type="button" onClick={() => setWizard(true)}>
+                    Set one up
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </main>
 
       {wizard && (

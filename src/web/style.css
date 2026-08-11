@@ -49,6 +49,10 @@ button.linkish{background:none;border:0;color:var(--amber);padding:.25rem 0;text
 .pending{color:var(--dim)}
 
 .stage{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+/* Whatever the pane is showing — a terminal, a box being built, an empty
+   state — it gets the same box, so measuring it before a terminal exists gives
+   the size that terminal will have. */
+.pane{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 .stage-bar{display:flex;align-items:center;gap:.5rem;padding:.4rem .85rem;border-bottom:1px solid var(--line);font-family:var(--mono)}
 /* The alternate screen has no scrollback, so the renderer deliberately leaves
    the wheel event alone there — without this the gesture bounces the page. */

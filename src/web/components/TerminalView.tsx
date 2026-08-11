@@ -1,5 +1,6 @@
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { DEFAULT_FONT_SIZE, gridFor } from "../terminal/metrics.ts"
 import { Renderer } from "../terminal/render.ts"
 import { Session } from "../terminal/session.ts"
 
@@ -17,12 +18,25 @@ export const TerminalView: React.FC<{
   sessionId: string
   fontSize?: number
   onStatus?: (s: string) => void
-}> = ({ url, token, sessionId, fontSize = 13, onStatus }) => {
+  /** The grid actually in use, whenever it changes. */
+  onResize?: (cols: number, rows: number) => void
+}> = ({ url, token, sessionId, fontSize = DEFAULT_FONT_SIZE, onStatus, onResize }) => {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sessionRef = useRef<Session | null>(null)
   const rendererRef = useRef<Renderer | null>(null)
+  const gridRef = useRef({ cols: 0, rows: 0 })
   const [linkUnder, setLinkUnder] = useState<string | null>(null)
+
+  // Held in refs and kept out of the effect's dependencies. A caller that
+  // passes an inline arrow — the ordinary thing to write — would otherwise
+  // hand this a new function on every render, and the effect below tears down
+  // the socket when it re-runs. That is a reconnect per keystroke of the
+  // parent's state, and it looks like a flaky network rather than a bug here.
+  const statusRef = useRef(onStatus)
+  statusRef.current = onStatus
+  const resizeRef = useRef(onResize)
+  resizeRef.current = onResize
 
   // One session per (box, sessionId). Re-running this on every render would
   // reconnect the socket constantly.
@@ -31,7 +45,13 @@ export const TerminalView: React.FC<{
     const canvas = canvasRef.current
     if (!wrap || !canvas) return
 
-    const session = new Session(url, token, sessionId, 100, 30)
+    // Built at the size it is about to be drawn at. `fit` re-asserts it to the
+    // daemon a moment later regardless — reattaching to a session someone else
+    // created means the pty's size is not ours to assume — but the emulator
+    // never briefly exists at a width nothing on screen has.
+    const first = wrap.getBoundingClientRect()
+    const start = gridFor(first.width, first.height, fontSize)
+    const session = new Session(url, token, sessionId, start.cols, start.rows)
     sessionRef.current = session
     const renderer = new Renderer(canvas, () => session.term, fontSize)
     rendererRef.current = renderer
@@ -40,12 +60,20 @@ export const TerminalView: React.FC<{
       const box = wrap.getBoundingClientRect()
       renderer.resizeCanvas(box.width, box.height)
       const { cols, rows } = renderer.gridFor(box.width, box.height)
-      session.resize(cols, rows)
+      // Only when the grid actually changed. A window drag fires the observer
+      // per animation frame, and every pixel of it would otherwise be a
+      // TIOCSWINSZ and a SIGWINCH — a full-screen program redrawing itself
+      // dozens of times through a gesture that moved it by one column.
+      if (cols !== gridRef.current.cols || rows !== gridRef.current.rows) {
+        gridRef.current = { cols, rows }
+        session.resize(cols, rows)
+        resizeRef.current?.(cols, rows)
+      }
       renderer.invalidate()
     }
     fit()
 
-    session.onStatus = s => onStatus?.(s)
+    session.onStatus = s => statusRef.current?.(s)
     session.onBytes = () => {
       renderer.markDamage(session.term?.takeDamage() ?? "none")
     }
@@ -83,7 +111,7 @@ export const TerminalView: React.FC<{
       sessionRef.current = null
       rendererRef.current = null
     }
-  }, [url, token, sessionId, fontSize, onStatus])
+  }, [url, token, sessionId, fontSize])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Let the browser keep copy and paste; everything else belongs to the pty.
