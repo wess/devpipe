@@ -130,6 +130,30 @@ apt-get update -qq
 apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https unzip
 say "[ok] base packages"
 
+phase "policy" "Setting what this box will install"
+# Peer-to-peer clients are pinned out of reach.
+#
+# This is friction, not a boundary, and it is worth being honest about which:
+# the account here has passwordless sudo by design, so anyone who means to get
+# past this can delete this file — never mind curl|bash, a static binary, a
+# container, or the same clients from npm and pip. It stops nobody determined.
+#
+# It is still worth having, because the person it stops is not determined. The
+# realistic case is a customer who types "apt install transmission-daemon"
+# because it was the first thing that came to mind, and a box that answers "no"
+# is usually the end of it. What that prevents is a DMCA notice arriving at the
+# provider account every customer's box is created under — where the remedy is
+# to lock the account, and one person's torrenting costs everyone their
+# machine. Same shape as the mail block in the firewall, one layer up.
+mkdir -p /etc/apt/preferences.d
+cat > /etc/apt/preferences.d/devpipe-p2p <<'PINEOF'
+Package: transmission* deluge* rtorrent qbittorrent* amule* mldonkey* aria2
+Pin: release *
+Pin-Priority: -1
+PINEOF
+chmod 0644 /etc/apt/preferences.d/devpipe-p2p
+say "[ok] peer-to-peer clients are not installable from the archive"
+
 phase "user" "Creating your account on the box"
 # The agent runs as a real user, not root. It is handed a shell and told to
 # run whatever it likes; root would make every mistake unrecoverable.

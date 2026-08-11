@@ -88,10 +88,25 @@ every customer's box is created under, and the provider's remedy is to lock that
 account — so one bad customer costs everyone their machine. Nothing in this
 product speaks SMTP from a box, so it costs no legitimate use.
 
-Restricting what a box may *install* is not a control and is not attempted. The
-box user has `NOPASSWD:ALL` sudo on purpose, and even without it there is
-`curl | bash`, pip, npm, cargo, Docker and static binaries. An apt policy would
-stop only the people using the product as intended.
+Peer-to-peer clients are pinned out of the archive
+(`/etc/apt/preferences.d/devpipe-p2p`, `Pin-Priority: -1`), so transmission,
+deluge, rtorrent, qbittorrent, amule and aria2 have no installation candidate.
+
+That is friction and not a boundary, and the difference matters: the account has
+`NOPASSWD:ALL` sudo by design and can delete the pin, and `curl | bash`, a static
+binary, a container, or the same clients from npm and pip all route around it. It
+stops nobody determined.
+
+It earns its place anyway because the person it stops is not determined. The
+realistic case is a customer reaching for the first thing that comes to mind, and
+a box that answers "no" usually ends it. What that prevents is a DMCA notice
+arriving at the provider account every customer's box is created under — where
+the remedy is to lock the account and one person's torrenting costs everyone
+their machine. The same reasoning as the mail block, one layer up.
+
+What would actually bound this is egress volume, which nothing measures yet.
+Droplets are created with `monitoring: true`, so the bandwidth figures exist and
+are unread.
 
 What the firewall closes: `docker run -p 5432:5432`, a dev server on
 `0.0.0.0:3000`, `python -m http.server`. None of those are decisions to publish a service on the

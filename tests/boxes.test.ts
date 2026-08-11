@@ -163,3 +163,40 @@ describe("what a box is built with", () => {
     expect(base).toMatch(/apt-get install .*unzip/)
   })
 })
+
+describe("what a box will install", () => {
+  const script = cloudInit({
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["claude-code"],
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
+    callbackSecret: "secret",
+  })
+
+  test("peer-to-peer clients are pinned out of the archive", () => {
+    // Not a boundary — the account has passwordless sudo and can delete the
+    // pin. It is friction aimed at the person who types `apt install
+    // transmission-daemon` because it was the first thing they thought of, and
+    // what it prevents is a DMCA notice landing on the provider account every
+    // customer's box is created under, where the remedy is to lock all of it.
+    const pin = script.slice(script.indexOf("devpipe-p2p"))
+    expect(pin).toContain("Pin-Priority: -1")
+    for (const client of ["transmission", "deluge", "rtorrent", "qbittorrent", "aria2"]) {
+      expect(pin).toContain(client)
+    }
+  })
+
+  test("and nothing a developer needs is caught by it", () => {
+    // A pin pattern is a glob. `git*` or a bare `*` here would take the box
+    // apart, and the failure would only show up as a build that cannot
+    // install its own dependencies.
+    const patterns = script.slice(script.indexOf("Package:"), script.indexOf("Pin: release"))
+    for (const wanted of ["git", "curl", "build-essential", "python3", "nodejs", "ripgrep"]) {
+      expect(patterns.includes(`${wanted} `) || patterns.includes(`${wanted}*`)).toBe(false)
+    }
+    expect(patterns).not.toContain("*\n")
+  })
+})
