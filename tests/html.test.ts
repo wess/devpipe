@@ -43,3 +43,20 @@ describe("the app shell", () => {
     expect(prepareIndexHtml(once)).toBe(once)
   })
 })
+
+describe("caching what has no hash in its name", () => {
+  test("the emulator is revalidated, not frozen for a year", async () => {
+    // /vt.wasm carries no content hash, so `immutable` meant a browser that
+    // had fetched it once never asked again. Shipping a new emulator then left
+    // every returning visitor on the old one — and because the loader checks
+    // for the exports it needs, a stale module makes every terminal on the
+    // page refuse to open, with an error that blames the render path.
+    const serve = await Bun.file("src/web/serve.ts").text()
+    const branch = serve.slice(serve.indexOf('path === "/vt.wasm"'))
+    const body = branch.slice(0, branch.indexOf("\n    }"))
+    expect(body).toContain("NO_CACHE")
+    expect(body).not.toContain("IMMUTABLE")
+    // An ETag is what keeps the revalidation cheap.
+    expect(body).toContain("etag")
+  })
+})

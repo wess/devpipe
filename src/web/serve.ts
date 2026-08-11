@@ -52,6 +52,9 @@ const wasmBytes = existsSync(WASM) ? await Bun.file(WASM).arrayBuffer() : null
 if (!wasmBytes) {
   console.warn("[devpipe] no vt.wasm — run: cd core && cargo build --release --target wasm32-unknown-unknown")
 }
+// Content-derived, so a rebuilt emulator is a different tag and a browser
+// holding the old one is told to take the new one.
+const wasmEtag = wasmBytes ? `"${Bun.hash(new Uint8Array(wasmBytes)).toString(16)}"` : '""'
 
 /** Static pages that sit next to the lander in `site/`. */
 const PAGES = new Set(["/terms.html", "/privacy.html", "/aup.html"])
@@ -131,12 +134,30 @@ const server = Bun.serve({
       }
     }
 
-    // The emulator itself. Immutable — it only changes when the binary does,
-    // and the bundle hash changes with it.
+    // The emulator itself.
+    //
+    // Revalidated, *not* immutable. This was served with a year of immutable
+    // caching on the strength of "the bundle hash changes with it" — which is
+    // true of the bundle and irrelevant here, because this URL carries no hash
+    // of its own. A browser that had fetched it once would never ask again, so
+    // shipping a new emulator left every returning visitor running the old one
+    // until they cleared their cache.
+    //
+    // That failure is worse than it sounds: the loader checks for the exports
+    // it needs, a stale module fails that check, and every terminal on the page
+    // then refuses to open. The ETag makes the common case a 304 and a few
+    // bytes rather than 350KB.
     if (path === "/vt.wasm") {
       if (!wasmBytes) return new Response("vt.wasm not built", { status: 503 })
+      if (req.headers.get("if-none-match") === wasmEtag) {
+        return new Response(null, { status: 304, headers: security({ etag: wasmEtag, "cache-control": NO_CACHE }) })
+      }
       return new Response(wasmBytes, {
-        headers: security({ "content-type": "application/wasm", "cache-control": IMMUTABLE }),
+        headers: security({
+          "content-type": "application/wasm",
+          "cache-control": NO_CACHE,
+          etag: wasmEtag,
+        }),
       })
     }
 

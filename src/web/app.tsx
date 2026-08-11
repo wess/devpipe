@@ -840,6 +840,8 @@ const App: React.FC = () => {
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(location.search).get("token"))
   const [notice, setNotice] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  /** Why the emulator did not load, when it did not. Terminals need it; nothing else does. */
+  const [vtError, setVtError] = useState<string | null>(null)
   // Read after `me()` has had a chance to refresh it, so a name changed on
   // another device — or an owner flag granted since sign-in — is reflected
   // rather than frozen at whatever the last sign-in wrote.
@@ -848,9 +850,21 @@ const App: React.FC = () => {
   useEffect(() => {
     // The emulator has to be in memory before a terminal can be constructed;
     // loading it up front keeps every terminal from paying for it.
+    //
+    // The failure is kept rather than swallowed. Carrying on as if the load
+    // had worked meant the next thing to happen was a Terminal constructor
+    // throwing "loadVt() must finish before a Terminal is created" — which is
+    // true, and says nothing about *why*, and sent me looking at the render
+    // path when the real answer was a cached emulator that no longer had the
+    // exports this build needs. The rest of the app still works without it;
+    // only terminals do not.
     loadVt()
       .then(() => setReady(true))
-      .catch(() => setReady(true))
+      .catch(err => {
+        console.error("[devpipe] the terminal emulator did not load:", err)
+        setVtError(String(err?.message ?? err))
+        setReady(true)
+      })
   }, [])
 
   useEffect(() => {
@@ -941,6 +955,20 @@ const App: React.FC = () => {
         </button>
       </nav>
 
+      {/* Said once, at the top, rather than left for a Terminal constructor to
+          discover. The usual cause is a cached emulator older than this build,
+          and "reload" is genuinely the fix — so it says so instead of showing
+          a stack trace about a constructor. */}
+      {vtError && (
+        <p className="note bad inline">
+          <span className="grow">
+            The terminal emulator did not load, so terminals cannot open. A reload usually fixes it. ({vtError})
+          </span>
+          <button type="button" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </p>
+      )}
       {route.view === "workspace" && <Workspace />}
       {route.view === "billing" && <Billing />}
       {route.view === "settings" && <Settings onSaved={setUser} />}
