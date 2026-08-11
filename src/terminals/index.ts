@@ -1,5 +1,6 @@
 import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
+import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
 
@@ -34,6 +35,20 @@ const callBox = async (box: any, path: string, init: RequestInit = {}) => {
   })
   if (res.status === 204) return null
   return res.json()
+}
+
+/**
+ * The one place a box's failure is ever named.
+ *
+ * The client is told the same sentence whatever went wrong, which is right —
+ * "that box is not answering" is all it can act on. But the cause was being
+ * discarded at the same moment, so a box that is merely slow, or one whose
+ * certificate has not issued yet, left nothing behind to tell it apart from a
+ * box that is genuinely down. The journal is where that difference belongs.
+ */
+const notAnswering = (c: Conn, box: { hostname: string }, path: string, err: unknown) => {
+  console.error(`[devpipe] box ${box.hostname} did not answer ${path}:`, err)
+  return json(c, 502, { error: "That box is not answering." })
 }
 
 export const terminalRoutes = (db: Connection) => {
@@ -71,8 +86,8 @@ export const terminalRoutes = (db: Connection) => {
         if (box.status !== "ready") return json(c, 200, [])
         try {
           return json(c, 200, (await callBox(box, "/v1/sessions")) ?? [])
-        } catch {
-          return json(c, 502, { error: "That box is not answering." })
+        } catch (err) {
+          return notAnswering(c, box, "/v1/sessions", err)
         }
       }),
     ),
@@ -97,8 +112,8 @@ export const terminalRoutes = (db: Connection) => {
             }),
           })
           return json(c, 201, created)
-        } catch {
-          return json(c, 502, { error: "That box is not answering." })
+        } catch (err) {
+          return notAnswering(c, box, "POST /v1/sessions", err)
         }
       }),
     ),
@@ -114,8 +129,8 @@ export const terminalRoutes = (db: Connection) => {
             method: "DELETE",
           })
           return json(c, 200, { ok: true })
-        } catch {
-          return json(c, 502, { error: "That box is not answering." })
+        } catch (err) {
+          return notAnswering(c, box, `DELETE /v1/sessions/${c.params.sid}`, err)
         }
       }),
     ),
