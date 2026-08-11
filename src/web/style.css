@@ -2,6 +2,11 @@
    are obviously the same product matters more here than any one of them being
    individually clever. */
 :root {
+  /* Declared, not implied. Without it the browser assumes a light page, and
+     the system colour keywords its own stylesheet uses resolve accordingly —
+     `CanvasText` becomes black. That reaches anything the UA colours for us:
+     <dialog>, scrollbars, autofill, select popups, date pickers. */
+  color-scheme: dark;
   --void:#0B0E14; --panel:#11151D; --panel2:#0D111A; --line:#1D2431;
   --text:#C9D1DE; --dim:#6B7688; --amber:#FFB454; --ember:#FF7A45; --good:#7BD88F;
   --mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, monospace;
@@ -120,7 +125,13 @@ button.danger:disabled{opacity:.45}
 /* ---- wizard ---- */
 .modal-scrim{position:absolute;inset:0;background:none;border:0;cursor:default}
 .modal-backdrop{position:fixed;inset:0;background:rgba(5,7,11,.7);display:flex;align-items:center;justify-content:center;padding:1.5rem;z-index:50}
-.modal{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:11px;width:100%;max-width:40rem;max-height:88vh;display:flex;flex-direction:column}
+/* The colour is not redundant with the one on <body>. A <dialog> carries the
+   UA's own `color`, so it breaks inheritance rather than passing it through:
+   every descendant that does not set a colour of its own took the browser's
+   idea of "text" instead of ours. Under a light-assuming UA that is black on
+   #11151D — the wizard's whole summary was invisible, and only `dt` escaped
+   because it happened to name a colour. */
+.modal{position:relative;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:11px;width:100%;max-width:40rem;max-height:88vh;display:flex;flex-direction:column}
 /* A confirmation is a sentence and a field. At the wizard's width it reads as
    a form with most of itself missing. */
 .modal.narrow{max-width:26rem}
