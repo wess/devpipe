@@ -75,6 +75,47 @@ export const CATALOG: readonly Tool[] = [
     credentials: [".codex/auth.json"],
   },
   {
+    id: "opencode",
+    runAs: "devpipe",
+    name: "OpenCode",
+    summary: "Open-source terminal agent, model of your choice.",
+    group: "agent",
+    memoryMb: 300,
+    install: "curl -fsSL https://opencode.ai/install | bash",
+    // Verified against `opencode --help` on a box: "auto-approve permissions
+    // that are not explicitly denied".
+    launch: ["opencode", "--auto"],
+    credentials: [".local/share/opencode/auth.json"],
+  },
+  {
+    id: "crush",
+    runAs: "devpipe",
+    name: "Crush",
+    summary: "Charm's terminal agent.",
+    group: "agent",
+    memoryMb: 250,
+    requires: ["node"],
+    install: "npm install -g @charmland/crush",
+    // Verified: "-y --yolo  Automatically accept all permissions".
+    launch: ["crush", "--yolo"],
+    credentials: [".local/share/crush/crush.json"],
+  },
+  {
+    id: "amp",
+    runAs: "devpipe",
+    name: "Amp",
+    summary: "Sourcegraph's agent. Permissions are configured, not a flag.",
+    group: "agent",
+    memoryMb: 300,
+    requires: ["node"],
+    install: "npm install -g @sourcegraph/amp",
+    // No auto-approve switch: amp keeps permissions in its own config and a
+    // `permissions` subcommand. Started plainly rather than pretending a flag
+    // exists — see `amp permissions --help` to make it unattended.
+    launch: ["amp"],
+    credentials: [".config/amp/settings.json"],
+  },
+  {
     id: "gemini",
     runAs: "devpipe",
     name: "Gemini CLI",

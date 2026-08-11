@@ -82,8 +82,19 @@ administers is a firewall the box can switch off, and Docker writes iptables
 rules that bypass `ufw` outright, so on the one tool most likely to publish a
 port a host firewall is not a control at all.
 
-What this closes: `docker run -p 5432:5432`, a dev server on `0.0.0.0:3000`,
-`python -m http.server`. None of those are decisions to publish a service on the
+Outbound is open except TCP 25, 465 and 587. Mail is the one egress worth
+closing: a box that relays spam gets the complaint sent to the provider account
+every customer's box is created under, and the provider's remedy is to lock that
+account — so one bad customer costs everyone their machine. Nothing in this
+product speaks SMTP from a box, so it costs no legitimate use.
+
+Restricting what a box may *install* is not a control and is not attempted. The
+box user has `NOPASSWD:ALL` sudo on purpose, and even without it there is
+`curl | bash`, pip, npm, cargo, Docker and static binaries. An apt policy would
+stop only the people using the product as intended.
+
+What the firewall closes: `docker run -p 5432:5432`, a dev server on
+`0.0.0.0:3000`, `python -m http.server`. None of those are decisions to publish a service on the
 public internet, and before the firewall all of them did. The catalogue's
 postgres and redis happen to bind loopback under Debian's defaults, but that is
 their default and not a property of the box.

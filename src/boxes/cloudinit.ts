@@ -140,7 +140,7 @@ chmod 0440 /etc/sudoers.d/devpipe
 # Installers drop binaries in ~/.local/bin and ~/.bun/bin; a login shell has to
 # find them or the tool is installed and still "not found".
 cat > /etc/profile.d/devpipe-path.sh <<'PATHEOF'
-export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/go/bin:$HOME/.opencode/bin:$PATH"
 PATHEOF
 chmod 0644 /etc/profile.d/devpipe-path.sh
 # Fish is not a POSIX shell and does not read profile.d at all, so the file
@@ -150,7 +150,7 @@ chmod 0644 /etc/profile.d/devpipe-path.sh
 # added to fix, one shell over.
 mkdir -p /etc/fish/conf.d
 cat > /etc/fish/conf.d/devpipe-path.fish <<'FISHEOF'
-for dir in $HOME/.local/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/go/bin
+for dir in $HOME/.local/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/go/bin $HOME/.opencode/bin
     if not contains $dir $PATH
         set -gx PATH $dir $PATH
     end
@@ -194,7 +194,7 @@ DEVPIPE_INSECURE=1
 # was therefore present on the box and unreachable from the button that starts
 # it, while opening a shell and typing the same name worked — which is what
 # made it look like a network fault rather than a missing PATH.
-PATH=/home/devpipe/.local/bin:/home/devpipe/.bun/bin:/home/devpipe/.cargo/bin:/home/devpipe/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PATH=/home/devpipe/.local/bin:/home/devpipe/.bun/bin:/home/devpipe/.cargo/bin:/home/devpipe/go/bin:/home/devpipe/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENVEOF
 chmod 0600 /etc/devpipe/env
 

@@ -158,12 +158,28 @@ export const boxFirewallSpec = (tag: string) => ({
     // daemon binds loopback and is only ever reached through the proxy.
     { protocol: "tcp", ports: "443", sources: { addresses: ANYWHERE } },
   ],
-  // Unrestricted. A box exists to fetch packages, clone repositories and let
-  // an agent call an API; egress filtering here would break the product and
-  // stop nothing, since anything running on the box can reach the internet
-  // through the ports we would have to leave open anyway.
+  // Open except for mail.
+  //
+  // A box exists to fetch packages, clone repositories and let an agent call an
+  // API, so egress is otherwise unrestricted — filtering it would break the
+  // product and stop very little, since anything on the box can reach the
+  // internet through the ports that have to stay open anyway.
+  //
+  // Mail is the exception because it is the one abuse that costs *other*
+  // customers their machines. A box that relays spam gets the complaint sent to
+  // the provider account every box is created under, and the provider's remedy
+  // is to lock that account — see the note at the top of security/abuse.ts.
+  // Nothing in this product needs to speak SMTP from a box, so 25, 465 and 587
+  // are the cheapest thing here: no legitimate use lost, and the fastest route
+  // from one bad customer to everyone's box being gone is closed.
+  //
+  // Written as the ranges around those ports because DigitalOcean's rules say
+  // what is allowed rather than what is denied.
   outbound_rules: [
-    { protocol: "tcp", ports: "all", destinations: { addresses: ANYWHERE } },
+    { protocol: "tcp", ports: "1-24", destinations: { addresses: ANYWHERE } },
+    { protocol: "tcp", ports: "26-464", destinations: { addresses: ANYWHERE } },
+    { protocol: "tcp", ports: "466-586", destinations: { addresses: ANYWHERE } },
+    { protocol: "tcp", ports: "588-65535", destinations: { addresses: ANYWHERE } },
     { protocol: "udp", ports: "all", destinations: { addresses: ANYWHERE } },
     { protocol: "icmp", destinations: { addresses: ANYWHERE } },
   ],

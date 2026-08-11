@@ -65,11 +65,34 @@ describe("what a box exposes to the internet", () => {
   })
 
   test("a box can still reach out", () => {
-    // Egress has to stay open — the box exists to fetch packages, clone
-    // repositories and call APIs. Both protocols, because blocking UDP
-    // silently breaks DNS and everything looks like a network outage.
-    const protocols = spec.outbound_rules.map(r => r.protocol).sort()
-    expect(protocols).toEqual(["icmp", "tcp", "udp"])
+    // Egress stays open — the box exists to fetch packages, clone repositories
+    // and call APIs. UDP included, because blocking it silently breaks DNS and
+    // the whole box then looks like a network outage.
+    const protocols = new Set(spec.outbound_rules.map(r => r.protocol))
+    expect([...protocols].sort()).toEqual(["icmp", "tcp", "udp"])
+  })
+
+  test("but it cannot send mail", () => {
+    // The one egress worth closing. A box that relays spam gets the complaint
+    // sent to the provider account every customer's box is created under, and
+    // the provider's remedy is to lock that account — so one bad customer
+    // costs everyone their machine. Nothing here needs SMTP from a box.
+    const reachable = (port: number) =>
+      spec.outbound_rules.some(rule => {
+        if (rule.protocol !== "tcp") return false
+        const ports = String(rule.ports)
+        if (ports === "all") return true
+        const [from, to] = ports.split("-").map(Number)
+        return port >= from && port <= (to ?? from)
+      })
+
+    for (const blocked of [25, 465, 587]) {
+      expect(reachable(blocked), `port ${blocked} is reachable`).toBe(false)
+    }
+    // Everything either side of them still is, or the box cannot work.
+    for (const open of [22, 24, 26, 443, 464, 466, 586, 588, 8080, 65535]) {
+      expect(reachable(open), `port ${open} was closed by accident`).toBe(true)
+    }
   })
 
   test("it is attached by tag, so it covers boxes nobody remembered", () => {
