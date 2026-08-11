@@ -89,14 +89,17 @@ ExecStart=$3
 WorkingDirectory=/opt/devpipe
 User=devpipe
 Group=devpipe
-# DATABASE_URL and DEVPIPE_SECRET_KEY live here rather than in this script, so
-# they stay off the repo and survive a redeploy. The second encrypts agent
-# logins at rest; without it the instance simply does not store them, which is
-# the right failure — the wrong one would be keeping somebody's Anthropic
-# credentials as plaintext while the screens said otherwise. It is required, not optional: the schema is
-# Postgres, and there is no local-file fallback to boot on. The leading - is so
-# a missing file is a clear startup error from the API rather than a systemd
-# unit that refuses to load and says nothing about why.
+# Secrets live here rather than in this script, so they stay off the repo and
+# survive a redeploy.
+#
+# DATABASE_URL is required, not optional: the schema is Postgres and there is
+# no local-file fallback to boot on. DEVPIPE_SECRET_KEY encrypts agent logins
+# at rest; without it the instance stores none, which is the right failure —
+# the wrong one would be keeping somebody's Anthropic credentials as plaintext
+# while every screen said otherwise.
+#
+# The leading - is so a missing file is a clear startup error from the API
+# rather than a systemd unit that refuses to load and says nothing about why.
 EnvironmentFile=-/etc/devpipe.env
 $4
 Restart=always
