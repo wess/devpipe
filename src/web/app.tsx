@@ -15,6 +15,7 @@ import {
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
+import { commandOf } from "../util/shell.ts"
 import * as api from "./api.ts"
 import { Admin } from "./components/Admin.tsx"
 import { BoxSetup } from "./components/BoxSetup.tsx"
@@ -484,7 +485,7 @@ const Workspace: React.FC = () => {
               <button type="button" className="row-main" onClick={() => setActiveSession(s.id)}>
                 <CircleDot size={12} className={s.alive ? "ok" : "pending"} />
                 <span className="row-body">
-                  <strong>{s.title || s.argv[0]?.split("/").pop() || s.id}</strong>
+                  <strong>{s.title || commandOf(s.argv) || s.id}</strong>
                   <span className="muted small">
                     {s.id} · {s.cols}×{s.rows}
                   </span>

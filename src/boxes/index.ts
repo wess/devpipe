@@ -6,6 +6,7 @@ import { attachSubscription, releaseSubscription, requireSubscriptionForBox } fr
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
 import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
+import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
@@ -20,6 +21,7 @@ const publicBox = (row: any) => ({
   status: row.status,
   status_detail: row.status_detail,
   ip: row.ip,
+  shell: row.shell ?? "bash",
   tools: safeTools(row.manifest),
   created_at: row.created_at,
   ready_at: row.ready_at,
@@ -102,7 +104,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
       "/boxes",
       createBox(async c => {
         const me = currentUser(c)
-        const b = c.body as { name?: string; region?: string; size?: string; tools?: string[] }
+        const b = c.body as { name?: string; region?: string; size?: string; tools?: string[]; shell?: string }
 
         const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
         if (!token) {
@@ -125,7 +127,15 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         const name = (b.name ?? "").trim().slice(0, 40) || "box"
         const region = REGIONS.find(r => r.slug === b.region)?.slug ?? (await getSetting(db, SETTING.defaultRegion))
         const size = SIZES.find(s => s.slug === b.size)?.slug ?? (await getSetting(db, SETTING.defaultSize))
-        const tools = resolve(b.tools ?? defaults()).map(t => t.id)
+        const shell = isShell(String(b.shell ?? "")) ? String(b.shell) : "bash"
+        // The shell is a tool as far as the build is concerned. Choosing zsh
+        // and not installing it leaves an account whose login shell does not
+        // exist, so the selection carries its own package rather than trusting
+        // the client to have ticked the right box.
+        const wanted = [...(b.tools ?? defaults())]
+        const shellTool = SHELLS[shell as ShellName].tool
+        if (shellTool && !wanted.includes(shellTool)) wanted.push(shellTool)
+        const tools = resolve(wanted).map(t => t.id)
 
         // Before the memory check, so somebody without a subscription is told
         // that rather than being told about memory first. 402 rather than 403:
@@ -155,6 +165,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               user_id: me.id,
               name,
               hostname,
+              shell,
               region,
               size,
               status: "creating",
@@ -202,6 +213,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               callbackUrl: `${appUrl}/api/boxes/callback`,
               logUrl: `${appUrl}/api/boxes/callback/log`,
               callbackSecret: agentToken,
+              shell,
             }),
             // Without a key nobody can get onto a box that wedges during
             // setup — the first real provisioning run hung and there was no

@@ -1,6 +1,7 @@
 import { Check, Loader2, X } from "lucide-react"
 import type React from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { SHELLS, type ShellName } from "../../util/shell.ts"
 import type { Catalog, Tool } from "../api.ts"
 import * as api from "../api.ts"
 
@@ -17,6 +18,9 @@ import * as api from "../api.ts"
  */
 
 const GROUPS: { key: Tool["group"]; title: string; blurb: string }[] = [
+  // Shells are chosen with the Shell control, not ticked here — picking one
+  // there adds its package, and ticking it here would install a shell the box
+  // never switches to.
   { key: "agent", title: "Agents", blurb: "The CLI you will actually work in." },
   { key: "runtime", title: "Runtimes", blurb: "Languages your projects need." },
   { key: "tooling", title: "Tools", blurb: "The small things you would miss." },
@@ -33,6 +37,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   // the server falls back to "box" if this is left alone anyway.
   const [name, setName] = useState("")
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [shell, setShell] = useState<ShellName>("bash")
   const [region, setRegion] = useState("nyc3")
   const [size, setSize] = useState("")
   const [busy, setBusy] = useState(false)
@@ -104,7 +109,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
     setBusy(true)
     setError(null)
     try {
-      const box = await api.createBox({ name, region, size, tools: [...picked] })
+      const box = await api.createBox({ name, region, size, shell, tools: [...picked] })
       onCreated(box.id)
     } catch (e: any) {
       // 402 means the subscription this size needs is missing or was taken by
@@ -237,6 +242,26 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               })}
             </div>
 
+            <h3>Shell</h3>
+            <p className="muted small">
+              What a terminal opens into, and what tools are launched under — so your aliases and rc files apply.
+            </p>
+            <div className="choice-grid">
+              {(Object.keys(SHELLS) as ShellName[]).map(key => (
+                <button
+                  type="button"
+                  key={key}
+                  className={`choice ${shell === key ? "on" : ""}`}
+                  onClick={() => setShell(key)}
+                >
+                  <strong>{SHELLS[key].label}</strong>
+                  <span className="muted small">
+                    {SHELLS[key].tool ? "Installed with the box" : "Already on the image"}
+                  </span>
+                </button>
+              ))}
+            </div>
+
             <h3>Region</h3>
             <p className="muted small">Pick the one nearest you — it is the round trip you feel.</p>
             <div className="choice-grid">
@@ -266,6 +291,8 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               <dd>
                 {sizes.find(s => s.slug === size)?.label} · ${sizes.find(s => s.slug === size)?.monthly}/mo
               </dd>
+              <dt>Shell</dt>
+              <dd>{SHELLS[shell].label}</dd>
               <dt>Region</dt>
               <dd>{catalog.regions.find(r => r.slug === region)?.label}</dd>
               <dt>Installing</dt>

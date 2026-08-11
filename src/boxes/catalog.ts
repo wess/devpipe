@@ -12,7 +12,7 @@ export type Tool = {
   readonly id: string
   readonly name: string
   readonly summary: string
-  readonly group: "agent" | "runtime" | "tooling" | "service"
+  readonly group: "agent" | "runtime" | "tooling" | "service" | "shell"
   /** Rough resident cost, so the wizard can warn before a box thrashes. */
   readonly memoryMb: number
   /** Shell that installs it on Debian, non-interactive. */
@@ -146,6 +146,22 @@ export const CATALOG: readonly Tool[] = [
       "apt-get update && apt-get install -y gh)",
   },
   {
+    id: "zsh",
+    name: "Zsh",
+    summary: "Interactive shell. Picking it here makes it your login shell.",
+    group: "shell",
+    memoryMb: 10,
+    install: "apt-get install -y zsh",
+  },
+  {
+    id: "fish",
+    name: "Fish",
+    summary: "Interactive shell with completions out of the box.",
+    group: "shell",
+    memoryMb: 12,
+    install: "apt-get install -y fish",
+  },
+  {
     id: "docker",
     name: "Docker",
     summary: "Containers. Hungry — give the box 2GB or more.",
@@ -189,7 +205,10 @@ export const resolve = (ids: readonly string[]): Tool[] => {
   }
   for (const id of ids) add(id)
 
-  const rank = { runtime: 0, tooling: 1, service: 2, agent: 3 } as const
+  // Shells first: cloud-init chsh's to the chosen one after the installs, and
+  // an agent that writes shell config wants the shell it is writing for to
+  // already exist.
+  const rank = { shell: 0, runtime: 1, tooling: 2, service: 3, agent: 4 } as const
   return CATALOG.filter(t => wanted.has(t.id)).sort((a, b) => rank[a.group] - rank[b.group])
 }
 

@@ -1,3 +1,4 @@
+import { shellPath } from "../util/shell.ts"
 import { resolve } from "./catalog.ts"
 
 /**
@@ -27,8 +28,11 @@ export const cloudInit = (opts: {
   callbackUrl: string
   logUrl: string
   callbackSecret: string
+  /** Login shell for the box's user. Bash when unset. */
+  shell?: string
 }): string => {
   const steps = resolve(opts.tools)
+  const shell = shellPath(opts.shell ?? "bash")
 
   // Each install is allowed to fail without taking the box down with it. A
   // missing editor is a worse outcome as "the box never came up" than as
@@ -138,6 +142,17 @@ grep -q devpipe-path /home/devpipe/.bashrc 2>/dev/null || \
 chown devpipe:devpipe /home/devpipe/.bashrc
 say "[ok] user devpipe"
 ${installs}
+
+phase "shell" "Setting your login shell"
+# After the installs, because the shell may be one of them. Checked rather
+# than assumed: chsh to a binary that is not there leaves an account whose
+# login shell does not exist, and every session on the box fails from then on
+# with nothing saying why.
+if [ -x "${shell}" ]; then
+  chsh -s "${shell}" devpipe && say "[ok] login shell is ${shell}"
+else
+  say "[!!] ${shell} is not installed — leaving the login shell as /bin/bash"
+fi
 
 phase "daemon" "Installing the Devpipe daemon"
 curl -fsSL "${opts.daemonUrl}" -o /usr/local/bin/devpiped

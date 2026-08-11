@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { loginShell } from "../util/shell.ts"
 
 /**
  * Terminal sessions on a user's box.
@@ -141,7 +142,7 @@ export const terminalRoutes = (db: Connection) => {
           const created = await callBox(box, "/v1/sessions", {
             method: "POST",
             body: JSON.stringify({
-              argv: b.argv ?? [],
+              argv: loginShell(b.argv ?? [], box.shell),
               cols: Math.min(Math.max(b.cols ?? 100, 20), 500),
               rows: Math.min(Math.max(b.rows ?? 30, 5), 200),
             }),
