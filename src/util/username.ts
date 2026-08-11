@@ -66,9 +66,14 @@ const RESERVED = new Set([
 /**
  * Names held for a specific person, by address. Everyone else is refused, and
  * the holder gets it whenever they get round to signing up.
+ *
+ * More than one address per name, because the person holding it is not the same
+ * thing as the mailbox they happen to sign up from — an instance address and a
+ * personal one are both them, and holding the name for only one of them refuses
+ * its owner with the same message it refuses a stranger.
  */
-const HELD: Record<string, string> = {
-  wess: "wess@devpipe.com",
+const HELD: Record<string, readonly string[]> = {
+  wess: ["wess@devpipe.com", "me@wess.io"],
 }
 
 export type UsernameVerdict = { ok: true } | { ok: false; reason: string }
@@ -87,7 +92,7 @@ export const checkUsername = (raw: string, email?: string): UsernameVerdict => {
     return { ok: false, reason: "That username is not available." }
   }
   const heldFor = HELD[username]
-  if (heldFor && heldFor !== address) {
+  if (heldFor && !(address && heldFor.includes(address))) {
     // Deliberately the same wording as a reserved name. Saying "held for
     // someone else" tells a stranger the name is real and worth watching.
     return { ok: false, reason: "That username is not available." }

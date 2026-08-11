@@ -77,10 +77,17 @@ describe("claiming a username", () => {
     }
   })
 
-  test("wess is held for one address and refused to everyone else", () => {
+  test("wess is held for its holder's addresses and refused to everyone else", () => {
     expect(checkUsername("wess", "wess@devpipe.com").ok).toBe(true)
+    // A held name has more than one address behind it. This is the case that
+    // was missing: the holder signing up from their personal address was
+    // refused with the wording meant for strangers.
+    expect(checkUsername("wess", "me@wess.io").ok).toBe(true)
+    // Case and surrounding space come from a form, not from the caller.
+    expect(checkUsername("wess", "  ME@Wess.IO  ").ok).toBe(true)
     expect(checkUsername("wess", "someone@else.com").ok).toBe(false)
     expect(checkUsername("wess").ok).toBe(false)
+    expect(checkUsername("wess", "").ok).toBe(false)
   })
 
   test("a claim reserves the name against registration by anyone else", async () => {
