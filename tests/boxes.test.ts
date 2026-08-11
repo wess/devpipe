@@ -41,7 +41,7 @@ beforeEach(() => {
 })
 
 describe("what a box exposes to the internet", () => {
-  const spec = boxFirewallSpec("devpipe")
+  const spec = boxFirewallSpec("devpipe-box")
   const inbound = spec.inbound_rules.map(r => r.ports)
 
   test("only ssh, the acme challenge, and https", () => {
@@ -96,7 +96,15 @@ describe("what a box exposes to the internet", () => {
   })
 
   test("it is attached by tag, so it covers boxes nobody remembered", () => {
-    expect(spec.tags).toEqual(["devpipe"])
+    expect(spec.tags).toEqual(["devpipe-box"])
+  })
+
+  test("and not the machine that provisions them", () => {
+    // The control plane carries the `devpipe` tag as well. A firewall hung on
+    // that reaches the host running the API — which is how closing outbound
+    // mail on boxes silently stopped the control plane sending a password
+    // reset, on the one host a mail server was about to be installed on.
+    expect(spec.tags).not.toContain("devpipe")
   })
 })
 

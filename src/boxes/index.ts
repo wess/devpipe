@@ -264,7 +264,10 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               .split(",")
               .map(s => Number(s.trim()))
               .filter(n => Number.isFinite(n) && n > 0),
-            tags: ["devpipe", `user-${me.id}`],
+            // `devpipe` for inventory, `devpipe-box` for the firewall: the
+            // control plane wears the first, so rules hung on it reach a
+            // machine that is not a box.
+            tags: ["devpipe", ocean.BOX_TAG, `user-${me.id}`],
           })
 
           await db.execute(

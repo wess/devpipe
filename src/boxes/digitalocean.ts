@@ -193,7 +193,18 @@ export const boxFirewallSpec = (tag: string) => ({
  * guards against is not "no firewall" — that is loud — but a rule added in the
  * console during an afternoon's debugging and never taken out again.
  */
-export const ensureBoxFirewall = async (token: string, tag = "devpipe"): Promise<string> => {
+/**
+ * The tag the firewall follows.
+ *
+ * Deliberately not "devpipe". The control plane carries that tag too, so a
+ * firewall attached to it covers the machine running the API — which is how
+ * closing outbound mail on boxes silently stopped the control plane from
+ * sending a password reset. A box is a box; the host that provisions them is
+ * not one, and the rules that suit one are wrong for the other.
+ */
+export const BOX_TAG = "devpipe-box"
+
+export const ensureBoxFirewall = async (token: string, tag = BOX_TAG): Promise<string> => {
   const spec = boxFirewallSpec(tag)
   const body: any = await request(token, "/firewalls?per_page=200")
   const existing = (body?.firewalls ?? []).find((f: any) => f.name === BOX_FIREWALL_NAME)
