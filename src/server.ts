@@ -8,7 +8,7 @@ import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
 import { billingRoutes } from "./billing/index.ts"
 import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
-import { reclaimIdle } from "./boxes/reclaim.ts"
+import { expireDormant, reclaimIdle } from "./boxes/reclaim.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
 import { claimRoutes } from "./claims/index.ts"
 import { createEmailer } from "./email/index.ts"
@@ -198,6 +198,9 @@ egress.unref()
 // and never touches a box without a workspace.
 const reclaim = setInterval(() => {
   void reclaimIdle(db).catch(err => console.error("[devpipe] idle reclaim:", err))
+  // Trials nobody came back to, whose workspaces are still being charged for.
+  // Off unless a number of days is set, because this deletes files.
+  void expireDormant(db).catch(err => console.error("[devpipe] dormant expiry:", err))
 }, 900_000)
 reclaim.unref()
 

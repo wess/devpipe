@@ -44,6 +44,28 @@ export const SETTING = {
    * Only ever applies to boxes carrying a workspace — see `reclaim.ts`.
    */
   idleHours: "boxes_idle_hours",
+  /**
+   * Idle hours for a box nobody is paying for. Falls back to `idleHours`.
+   *
+   * Separate because the right answer differs. Somebody paying for a box wants
+   * it there when they come back; somebody trying the product out for twenty
+   * minutes costs the owner money for every hour it lingers afterwards.
+   */
+  freeIdleHours: "boxes_free_idle_hours",
+  /**
+   * Gigabytes of workspace given to a free box that asked for none. 0 disables.
+   *
+   * Not generosity — reclaim only ever touches boxes carrying a workspace,
+   * because a box without one holds the only copy of what is on it. A free box
+   * with no workspace can therefore never be reclaimed, which is exactly
+   * backwards: the boxes nobody pays for are the ones that most need to sleep.
+   */
+  freeWorkspaceGb: "boxes_free_workspace_gb",
+  /**
+   * Days a free box may stay asleep before it and its workspace are deleted.
+   * 0 disables, which is the default: this throws away somebody's files.
+   */
+  dormantDays: "boxes_dormant_days",
 } as const
 
 const DEFAULTS: Record<string, string> = {
@@ -64,6 +86,15 @@ const DEFAULTS: Record<string, string> = {
   // the wrong surprise, so it is never the default on an instance that has not
   // been told how long "idle" means.
   [SETTING.idleHours]: "0",
+  // Falls back to idleHours when 0, so an instance that sets one number gets
+  // one behaviour rather than a silent second policy.
+  [SETTING.freeIdleHours]: "0",
+  // One gigabyte, which is the smallest a volume can be and about ten cents a
+  // month — enough that a trial keeps its work, cheap enough to be given away.
+  [SETTING.freeWorkspaceGb]: "1",
+  // Off. Deleting a workspace destroys files somebody may still want, and that
+  // is not a thing to start doing because a default said so.
+  [SETTING.dormantDays]: "0",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.sshKeyIds]: "",
   // A percentage on top of what the provider charges. 100 means the customer

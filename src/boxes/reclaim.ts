@@ -45,22 +45,38 @@ export type Idle = {
  * through a long task with nobody watching is a live session, and a box running
  * one is not idle no matter how long since a human looked at it.
  */
-export const idleBoxes = async (db: Connection, hours: number): Promise<Idle[]> => {
-  if (!Number.isFinite(hours) || hours <= 0) return []
+export const idleBoxes = async (db: Connection, hours: number, freeHours = 0): Promise<Idle[]> => {
+  const paid = Number.isFinite(hours) && hours > 0 ? hours : 0
+  const free = Number.isFinite(freeHours) && freeHours > 0 ? freeHours : paid
+  if (paid <= 0 && free <= 0) return []
 
-  const cutoff = new Date(Date.now() - hours * 3_600_000)
+  // The *shortest* of the two windows, narrowed per box below.
+  //
+  // Not the longest: a box idle for three hours qualifies under a one-hour free
+  // window and not a one-day paid one, and pre-filtering on the longer window
+  // throws away exactly the boxes the shorter one exists to catch.
+  const shortest = Math.min(...[paid, free].filter(h => h > 0))
   const rows = (await db.all(
     from("boxes")
       .where(q => q("destroyed_at").isNull())
       .where(q => q("status").equals("ready"))
       // The rule the whole feature rests on.
       .where(q => q("workspace_id").isNotNull())
-      .where(q => q("last_active_at").lessThan(cutoff)),
+      .where(q => q("last_active_at").lessThan(new Date(Date.now() - shortest * 3_600_000))),
   )) as any[]
 
   const idle: Idle[] = []
   for (const box of rows) {
     if (!box.provider_id) continue
+
+    // A box nobody is paying for sleeps sooner. `subscription_id` is null for
+    // both a free instance and the owner's own boxes, which is the right set:
+    // neither is generating revenue that an idle hour eats into.
+    const covered = (await db.one(from("subscriptions").where(q => q("box_id").equals(box.id)))) as any
+    const limit = covered ? paid : free
+    if (limit <= 0) continue
+    const idleFor = Date.now() - new Date(box.last_active_at).getTime()
+    if (idleFor < limit * 3_600_000) continue
     // Ask the box. A daemon that cannot be reached is not evidence of idleness
     // — it is evidence of a network problem, and reclaiming on that basis
     // destroys a machine somebody is probably still using.
@@ -162,14 +178,77 @@ export const sleepBox = async (db: Connection, box: Idle): Promise<boolean> => {
  */
 export const reclaimIdle = async (db: Connection): Promise<Idle[]> => {
   const hours = Number(await getSetting(db, SETTING.idleHours))
-  if (!Number.isFinite(hours) || hours <= 0) return []
+  const freeHours = Number(await getSetting(db, SETTING.freeIdleHours))
+  const anyOn = (Number.isFinite(hours) && hours > 0) || (Number.isFinite(freeHours) && freeHours > 0)
+  if (!anyOn) return []
 
   const slept: Idle[] = []
-  for (const box of await idleBoxes(db, hours)) {
+  for (const box of await idleBoxes(db, hours, freeHours)) {
     if (await sleepBox(db, box)) {
       console.log(`[devpipe] ${box.hostname} slept after ${box.idleHours}h idle`)
       slept.push(box)
     }
   }
   return slept
+}
+
+/**
+ * Boxes that have been asleep so long nobody is coming back.
+ *
+ * A slept box costs nothing to run, but its workspace is charged for forever,
+ * and somebody who signed up once and never returned leaves one behind. This is
+ * the only thing in the file that destroys data, so it is off unless a number
+ * is set, and it applies only to boxes that were never paid for — a subscriber's
+ * files are not something to tidy up on a timer.
+ */
+export const expireDormant = async (db: Connection): Promise<number> => {
+  const days = Number(await getSetting(db, SETTING.dormantDays))
+  if (!Number.isFinite(days) || days <= 0) return 0
+
+  const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+  if (!token) return 0
+
+  const cutoff = new Date(Date.now() - days * 86_400_000)
+  const rows = (await db.all(
+    from("boxes")
+      .where(q => q("destroyed_at").isNull())
+      .where(q => q("status").equals(ASLEEP))
+      .where(q => q("last_active_at").lessThan(cutoff)),
+  )) as any[]
+
+  let gone = 0
+  for (const box of rows) {
+    // Never a box somebody is paying for, however long it has slept.
+    const covered = (await db.one(from("subscriptions").where(q => q("box_id").equals(box.id)))) as any
+    if (covered) continue
+
+    if (box.workspace_id) {
+      const workspace = (await db.one(from("workspaces").where(q => q("id").equals(box.workspace_id)))) as any
+      if (workspace) {
+        try {
+          await ocean.destroyVolume(token, workspace.volume_id)
+        } catch (err) {
+          // The row stays and the box stays. A volume the provider still has
+          // and we have forgotten is a charge nobody can explain.
+          console.error(`[devpipe] could not delete ${workspace.name} while expiring ${box.hostname}:`, err)
+          continue
+        }
+        await db.execute(
+          from("workspaces")
+            .where(q => q("id").equals(workspace.id))
+            .update({ deleted_at: new Date() }),
+        )
+      }
+    }
+
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(box.id))
+        .update({ status: "destroyed", destroyed_at: new Date(), workspace_id: null }),
+    )
+    await audit(db, box.user_id, "box.expired", `${box.hostname} after ${days}d asleep`)
+    console.log(`[devpipe] ${box.hostname} expired after ${days} days asleep`)
+    gone++
+  }
+  return gone
 }

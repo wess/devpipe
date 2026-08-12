@@ -305,40 +305,20 @@ A box goes from nothing to a working terminal in about two minutes.
 - **Everything runs as root** on the box.
 - **The worst-case render ceiling** (see Spike 0).
 
-## Firecracker microVMs, for a free tier
 
-Measured on a DigitalOcean `s-2vcpu-4gb` in nyc3, Firecracker v1.16.1, 512MB
-guest, on 2026-08-12. The lab droplet was destroyed afterwards.
+## Firecracker microVMs — evaluated, not adopted
 
-| | |
-|---|---|
-| `/dev/kvm` on an ordinary droplet | **present**, `vmx` available |
-| cold boot to guest kernel | 238–274 ms (5 runs, ~240 median) |
-| snapshot a running microVM | ~1.7 s |
-| restore from snapshot | **20–26 ms** (5 runs) |
-| snapshot memory file | 513 MB raw — exactly guest RAM, not sparse |
-| the same file gzipped | 5.3 MB |
+Measured on a DigitalOcean `s-2vcpu-4gb` in nyc3, Firecracker v1.16.1, 2026-08-12,
+then removed. Kept only so nobody pays to learn it twice:
 
-Nested virtualisation working on stock droplets was the fact the whole idea
-depended on, and it was the one most likely to kill it. It does not.
+- Nested virtualisation **works** on stock droplets — `/dev/kvm` is present.
+- Cold boot to guest kernel ~240ms; **restore from snapshot ~22ms**.
+- The snapshot memory file is exactly guest RAM and is not sparse.
 
-**Restore at ~22ms is what makes a free tier possible.** It is faster than the
-page that triggers it, so a free box can be put away after minutes of idleness
-rather than hours, and memory is only spent on people actually typing.
+It was dropped for one reason: a microVM host bills 24/7 whether anyone signs up
+or not, and a slept droplet bills nothing. $48/mo buys ~5,400 box-hours, so
+packing only wins past roughly **180 box-hours of free usage a day** — about a
+hundred daily-active free users. Below that it costs more than the idle-reclaim
+that already exists, for weeks of extra infrastructure.
 
-**Packing without snapshotting is not worth building.** Twelve resident 512MB
-guests on a $48 host is $4/seat, which is the cheapest droplet — an entire
-virtualisation subsystem to save nothing. The economics come from the snapshots,
-not the density. See `src/boxes/microvm.ts`, where that is asserted rather than
-remembered.
-
-The 5.3MB compressed figure is a freshly booted guest, which is almost all zero
-pages; a guest somebody has worked in will not compress nearly as well. The
-sizing code assumes 8x and should be treated as optimistic until measured
-against a real workload.
-
-Still needed before this serves anyone: a guest rootfs carrying the agent
-tooling, and the control-plane half that places boxes on hosts and routes
-connections to them. `deploy/firecracker-host.sh` provisions a capable host and
-was verified end to end, including booting a guest to userspace under the
-systemd unit it installs, with CPU and memory limits applied.
+Worth revisiting at that volume, or if wake latency becomes the complaint.

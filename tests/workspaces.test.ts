@@ -333,6 +333,10 @@ describe("a box that carries one", () => {
 
   test("a box without one is told nothing about mounting", async () => {
     created = null
+    // Free boxes are granted a small workspace so they can be reclaimed while
+    // idle, which would otherwise give this box one. Turned off here, because
+    // what is under test is the box that genuinely has none.
+    await setSetting(db, SETTING.freeWorkspaceGb, "0")
     stubProvider()
     const boxes = router(...boxRoutes(db, "http://test")) as any
     const res = await boxes(
@@ -345,5 +349,78 @@ describe("a box that carries one", () => {
     expect(res.status).toBe(201)
     expect(String(created.user_data)).not.toContain("Mounting your workspace")
     stubOcean()
+  })
+})
+
+describe("a free box is given somewhere to keep its work", () => {
+  /**
+   * Reclaim only ever touches boxes carrying a workspace, so a free box with
+   * none could never be put to sleep — which is backwards, because the boxes
+   * nobody pays for are the ones that most need to.
+   */
+  let made: any = null
+
+  const stubAll = () => {
+    globalThis.fetch = (async (input: any, init: any = {}) => {
+      const url = String(typeof input === "string" ? input : input.url)
+      if (!url.startsWith("https://api.digitalocean.com/")) return realFetch(input, init)
+      const path = url.slice("https://api.digitalocean.com/v2".length)
+      const method = String(init.method ?? "GET")
+      const body = init.body ? JSON.parse(String(init.body)) : null
+      const reply = (d: unknown, st = 200) =>
+        new Response(JSON.stringify(d), { status: st, headers: { "content-type": "application/json" } })
+
+      if (path === "/volumes" && method === "POST") {
+        return reply(
+          { volume: { id: "vol-free", name: body.name, region: { slug: body.region }, size_gigabytes: body.size_gigabytes, droplet_ids: [] } },
+          201,
+        )
+      }
+      if (path === "/droplets" && method === "POST") {
+        made = body
+        return reply({ droplet: { id: 77, networks: { v4: [] } } }, 202)
+      }
+      if (path.includes("/actions")) return reply({ action: { id: 1, status: "completed" } }, 201)
+      if (path.startsWith("/droplets/77")) return reply({ droplet: { id: 77, status: "active", networks: { v4: [] } } })
+      return reply({}, 200)
+    }) as any
+  }
+
+  const createBox = async (name: string) => {
+    const boxes = router(...boxRoutes(db, "http://test")) as any
+    return await boxes(
+      new Request("http://test/boxes", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${me.token}` },
+        body: JSON.stringify({ name, region: "nyc3", size: "s-1vcpu-1gb", tools: ["git"] }),
+      }),
+    )
+  }
+
+  test("one is created, and the box is told to mount it", async () => {
+    await setSetting(db, SETTING.freeWorkspaceGb, "1")
+    made = null
+    stubAll()
+    const res = await createBox("trial")
+    expect(res.status).toBe(201)
+    expect(String(made.user_data)).toContain("Mounting your workspace")
+
+    // Theirs, listed, and deletable — it is a workspace like any other.
+    stubOcean()
+    const list = await call("GET", "/workspaces", undefined, me.token)
+    expect(list.data).toHaveLength(1)
+    expect(list.data[0].size_gb).toBe(1)
+  })
+
+  test("none is created when the size is set to zero", async () => {
+    await setSetting(db, SETTING.freeWorkspaceGb, "0")
+    made = null
+    stubAll()
+    const res = await createBox("plain")
+    expect(res.status).toBe(201)
+    expect(String(made.user_data)).not.toContain("Mounting your workspace")
+    stubOcean()
+    const list = await call("GET", "/workspaces", undefined, me.token)
+    expect(list.data).toHaveLength(0)
   })
 })

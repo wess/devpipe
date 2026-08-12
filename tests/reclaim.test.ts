@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test"
 import { from } from "@atlas/db"
-import { ASLEEP, idleBoxes, reclaimIdle, setLiveSessions } from "../src/boxes/reclaim.ts"
+import { ASLEEP, expireDormant, idleBoxes, reclaimIdle, setLiveSessions } from "../src/boxes/reclaim.ts"
 import { CREDENTIAL, setCredential, setSetting, SETTING } from "../src/settings/index.ts"
 import { db, truncateAll } from "./setup.ts"
 
@@ -183,5 +183,105 @@ describe("what it does reclaim", () => {
     expect(await reclaimIdle(db)).toHaveLength(0)
     expect(destroyed).toHaveLength(0)
     stubOcean()
+  })
+})
+
+describe("boxes nobody is paying for", () => {
+  /** A subscription covering a box is what makes it "paid" here. */
+  const cover = async (boxId: number) => {
+    await db.execute(
+      from("subscriptions").insert({
+        user_id: userId,
+        box_id: boxId,
+        size: "s-1vcpu-1gb",
+        status: "active",
+        stripe_subscription_id: `sub_${boxId}`,
+      }),
+    )
+  }
+
+  test("an unpaid box sleeps on the shorter free window", async () => {
+    await setSetting(db, SETTING.idleHours, "24")
+    await setSetting(db, SETTING.freeIdleHours, "1")
+    await boxAged(3, { name: "trial" })
+    const idle = await idleBoxes(db, 24, 1)
+    // Three hours idle: past the free hour, nowhere near the paid day.
+    expect(idle).toHaveLength(1)
+    expect(idle[0]?.name).toBe("trial")
+  })
+
+  test("a paid box keeps the longer window", async () => {
+    await setSetting(db, SETTING.idleHours, "24")
+    await setSetting(db, SETTING.freeIdleHours, "1")
+    const id = await boxAged(3, { name: "paid" })
+    await cover(id)
+    expect(await idleBoxes(db, 24, 1)).toHaveLength(0)
+  })
+
+  test("free hours alone still work when the paid window is off", async () => {
+    await setSetting(db, SETTING.idleHours, "0")
+    await setSetting(db, SETTING.freeIdleHours, "2")
+    await boxAged(5)
+    expect(await reclaimIdle(db)).toHaveLength(1)
+  })
+})
+
+describe("trials nobody came back to", () => {
+  const asleep = async (days: number, name = "abandoned") => {
+    const id = await boxAged(days * 24, { name })
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(id))
+        .update({ status: ASLEEP }),
+    )
+    return id
+  }
+
+  test("nothing happens unless a number of days is set", async () => {
+    await asleep(90)
+    await setSetting(db, SETTING.dormantDays, "0")
+    expect(await expireDormant(db)).toBe(0)
+    const ws = (await db.one(from("workspaces").where(q => q("id").equals(workspaceId)))) as any
+    expect(ws.deleted_at).toBeNull()
+  })
+
+  test("an abandoned trial and its workspace are removed", async () => {
+    const id = await asleep(90)
+    await setSetting(db, SETTING.dormantDays, "30")
+    expect(await expireDormant(db)).toBe(1)
+
+    const box = (await db.one(from("boxes").where(q => q("id").equals(id)))) as any
+    expect(box.destroyed_at).not.toBeNull()
+    const ws = (await db.one(from("workspaces").where(q => q("id").equals(workspaceId)))) as any
+    expect(ws.deleted_at).not.toBeNull()
+  })
+
+  test("not one that has not been asleep long enough", async () => {
+    await asleep(5)
+    await setSetting(db, SETTING.dormantDays, "30")
+    expect(await expireDormant(db)).toBe(0)
+  })
+
+  // Somebody's files are not something to tidy up on a timer because they
+  // stopped using a box for a month.
+  test("never a box somebody is paying for", async () => {
+    const id = await asleep(90)
+    await db.execute(
+      from("subscriptions").insert({
+        user_id: userId,
+        box_id: id,
+        size: "s-1vcpu-1gb",
+        status: "active",
+        stripe_subscription_id: "sub_paid",
+      }),
+    )
+    await setSetting(db, SETTING.dormantDays, "30")
+    expect(await expireDormant(db)).toBe(0)
+  })
+
+  test("an awake box is never expired, however old", async () => {
+    await boxAged(24 * 90, { name: "busy" })
+    await setSetting(db, SETTING.dormantDays, "30")
+    expect(await expireDormant(db)).toBe(0)
   })
 })

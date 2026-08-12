@@ -180,6 +180,46 @@ export const provision = async (
   return droplet.id
 }
 
+/**
+ * Makes a workspace for somebody who did not ask for one.
+ *
+ * Named after the box so it is recognisable in settings later, and uniquely
+ * enough that creating a second box does not collide with the first. The row
+ * looks exactly like one somebody made deliberately — it is theirs, it is
+ * listed, and they can delete it — because it is.
+ */
+const grantWorkspace = async (
+  db: Connection,
+  token: string,
+  userId: number,
+  region: string,
+  sizeGb: number,
+  boxName: string,
+): Promise<any> => {
+  const base =
+    (boxName || "box")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .slice(0, 24) || "box"
+  const name = `${base}-files`
+  const volumeName = `dp-${userId}-${name}-${shortId(4)}`.slice(0, 60)
+  const volume = await ocean.createVolume(token, { name: volumeName, region, sizeGb })
+  const rows = (await db.execute(
+    from("workspaces")
+      .insert({
+        user_id: userId,
+        name,
+        region,
+        size_gb: sizeGb,
+        volume_id: volume.id,
+        volume_name: volume.name || volumeName,
+      })
+      .returning("id", "name", "region", "size_gb", "volume_id", "volume_name"),
+  )) as any[]
+  await audit(db, userId, "workspace.granted", `${name} ${sizeGb}GB with ${boxName}`)
+  return rows[0]
+}
+
 export const boxRoutes = (db: Connection, appUrl: string) => {
   const authed = pipeline(requireAuth({ db }))
 
@@ -312,6 +352,27 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
 
         const gate = await requireSubscriptionForBox(db, me.id, size, Boolean(me.is_owner))
         if (!gate.ok) return json(c, 402, { error: gate.reason })
+
+        // A box nobody is paying for, with nowhere to keep its work.
+        //
+        // Given a small workspace rather than none, because reclaim only ever
+        // touches boxes carrying one — a box without a workspace holds the only
+        // copy of what is on it. Left alone, the boxes nobody pays for would be
+        // the only ones that could never be put to sleep, which is exactly the
+        // wrong way round. A gigabyte is the smallest a volume can be and costs
+        // about ten cents a month.
+        if (!workspace && !gate.subscriptionId) {
+          const freeGb = Number(await getSetting(db, SETTING.freeWorkspaceGb))
+          if (Number.isFinite(freeGb) && freeGb > 0) {
+            workspace = await grantWorkspace(db, token, me.id, region, freeGb, name).catch(err => {
+              // Not fatal. A box with no workspace is worse than one with, and
+              // far better than no box at all because a volume could not be
+              // made — it simply never sleeps.
+              console.error("[devpipe] could not grant a free workspace:", err)
+              return null
+            })
+          }
+        }
 
         // Refuse a build that would be killed by the OOM killer later. The
         // failure it prevents looks like a random disconnect mid-task, which
