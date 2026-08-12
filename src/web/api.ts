@@ -20,8 +20,25 @@ export type Box = {
   shell: string
   synapse: boolean
   tools: string[]
+  workspace_id: number | null
   created_at: string
   ready_at: string | null
+}
+
+/**
+ * Storage that outlives the box.
+ *
+ * `attached_to` is the box currently holding it, and null means free. Block
+ * storage mounts to one machine at a time, so this is a lock rather than a
+ * status — a workspace with a holder cannot be given to a second box.
+ */
+export type Workspace = {
+  id: number
+  name: string
+  region: string
+  size_gb: number
+  created_at: string
+  attached_to: number | null
 }
 
 export type TerminalSession = {
@@ -198,8 +215,14 @@ export const createBox = (input: {
   shell: string
   synapse: boolean
   tools: string[]
+  workspace_id?: number | null
 }) => call<{ id: number; hostname: string; status: string }>("POST", "/boxes", input)
 export const destroyBox = (id: number) => call("DELETE", `/boxes/${id}`)
+
+export const listWorkspaces = () => call<Workspace[]>("GET", "/workspaces")
+export const createWorkspace = (input: { name: string; region: string; size_gb: number }) =>
+  call<Workspace>("POST", "/workspaces", input)
+export const deleteWorkspace = (id: number) => call("DELETE", `/workspaces/${id}`)
 
 export const boxSessions = (id: number) => call<TerminalSession[]>("GET", `/boxes/${id}/sessions`)
 export const createTerminal = (id: number, argv: string[], cols: number, rows: number) =>

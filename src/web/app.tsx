@@ -671,6 +671,14 @@ const DestroyBox: React.FC<{
             The machine is deleted along with everything on it, and every terminal running on it ends. This cannot be
             undone.
           </p>
+          {/* The whole promise of a workspace is that this sentence stops being
+              true of the work. Saying so here is the moment it matters. */}
+          {box.workspace_id !== null && (
+            <p className="note">
+              Your workspace is detached, not deleted — anything under it survives this and can be mounted on the next
+              box.
+            </p>
+          )}
           <p className="muted small">
             Any subscription covering it is freed for the next box — destroying does not cancel it. That happens in the
             billing portal.

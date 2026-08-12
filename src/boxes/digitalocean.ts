@@ -289,3 +289,113 @@ export const outboundMbps = async (token: string, dropletId: string, windowSecon
 
 /** Megabits per second to gigabytes over the same window. */
 export const gigabytesOver = (mbps: number, windowSeconds: number): number => (mbps * windowSeconds) / 8 / 1000
+
+// ---- volumes ----------------------------------------------------------------
+
+/**
+ * Block storage that outlives the machine it is attached to.
+ *
+ * A box is meant to be disposable — the manifest rebuilds one identically, which
+ * is what makes destroying it survivable. What it does not rebuild is the work:
+ * the destroy dialog says so outright, and it is the one thing on a box nobody
+ * can replace. A volume is how "destroy the machine, keep the work" becomes true
+ * rather than a wish.
+ *
+ * Two properties decide everything about how this is used:
+ *
+ * - A volume attaches to exactly one droplet at a time. Two boxes cannot share
+ *   one, and a volume still attached to a droplet cannot be attached to another.
+ * - A volume is pinned to a region. A workspace therefore has a region, and a
+ *   box created elsewhere cannot mount it.
+ */
+export type Volume = {
+  id: string
+  name: string
+  region: string
+  sizeGb: number
+  dropletIds: number[]
+}
+
+const volume = (v: any): Volume => ({
+  id: v.id,
+  name: v.name,
+  region: v.region?.slug ?? "",
+  sizeGb: v.size_gigabytes ?? 0,
+  dropletIds: v.droplet_ids ?? [],
+})
+
+export const createVolume = async (
+  token: string,
+  opts: { name: string; region: string; sizeGb: number },
+): Promise<Volume> => {
+  const body: any = await request(token, "/volumes", {
+    method: "POST",
+    body: JSON.stringify({
+      name: opts.name,
+      region: opts.region,
+      size_gigabytes: opts.sizeGb,
+      // Formatted on creation so the box only has to mount it. Formatting on
+      // first boot would mean a cloud-init that can destroy a workspace by
+      // running twice.
+      filesystem_type: "ext4",
+    }),
+  })
+  return volume(body.volume)
+}
+
+export const getVolume = async (token: string, id: string): Promise<Volume | null> => {
+  try {
+    const body: any = await request(token, `/volumes/${id}`)
+    return body?.volume ? volume(body.volume) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Attaches, and waits for the action to finish.
+ *
+ * The droplet cannot mount a device that is not there yet, and the API returns
+ * before the attach completes — so a cloud-init that runs immediately finds
+ * nothing at /dev/disk/by-id and mounts an empty directory instead, which looks
+ * exactly like an empty workspace.
+ */
+export const attachVolume = async (token: string, volumeId: string, dropletId: number): Promise<void> => {
+  const body: any = await request(token, `/volumes/${volumeId}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ type: "attach", droplet_id: dropletId }),
+  })
+  await settle(token, volumeId, body?.action?.id)
+}
+
+/**
+ * Detaches, and waits.
+ *
+ * Called before a droplet is destroyed. A volume left attached to a droplet
+ * that no longer exists is not automatically freed, and it goes on being
+ * charged for while belonging to nothing.
+ */
+export const detachVolume = async (token: string, volumeId: string, dropletId: number): Promise<void> => {
+  const body: any = await request(token, `/volumes/${volumeId}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ type: "detach", droplet_id: dropletId }),
+  })
+  await settle(token, volumeId, body?.action?.id)
+}
+
+export const destroyVolume = async (token: string, volumeId: string): Promise<void> => {
+  await request(token, `/volumes/${volumeId}`, { method: "DELETE" })
+}
+
+/** Polls one volume action to completion. Gives up rather than hanging. */
+const settle = async (token: string, volumeId: string, actionId?: number, tries = 30): Promise<void> => {
+  if (!actionId) return
+  for (let i = 0; i < tries; i++) {
+    const body: any = await request(token, `/volumes/${volumeId}/actions/${actionId}`)
+    const status = body?.action?.status
+    if (status === "completed") return
+    if (status === "errored") throw new Error("DigitalOcean could not move that volume.")
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
+  throw new Error("DigitalOcean is taking too long with that volume.")
+}

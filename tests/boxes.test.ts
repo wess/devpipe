@@ -256,3 +256,54 @@ describe("carrying project memory to a box", () => {
     expect(script).not.toMatch(/sync\.key|sync\.token/)
   })
 })
+
+describe("mounting a workspace", () => {
+  const base = {
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["claude-code"],
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
+    callbackSecret: "secret",
+  }
+
+  test("only when a workspace was attached", () => {
+    expect(cloudInit(base)).not.toContain("Mounting your workspace")
+    expect(cloudInit({ ...base, volumeName: "dp-1-main" })).toContain("Mounting your workspace")
+  })
+
+  test("mounts by volume id, and puts it in fstab the same way", () => {
+    const script = cloudInit({ ...base, volumeName: "dp-1-main" })
+    expect(script).toContain("/dev/disk/by-id/scsi-0DO_Volume_dp-1-main")
+    // nofail, so a box whose volume is missing still boots to a terminal
+    // somebody can look at rather than dropping to emergency mode.
+    expect(script).toMatch(/\/home\/devpipe\/work ext4 [^\n]*nofail/)
+  })
+
+  // The failure this catches is silent: mounting before the account exists
+  // leaves /home/devpipe owned by root, because useradd will not adopt a home
+  // directory it did not create. The box comes up, and the agent cannot write
+  // to its own home or the workspace under it.
+  test("happens after the account it belongs to exists", () => {
+    const script = cloudInit({ ...base, volumeName: "dp-1-main" })
+    expect(script.indexOf("useradd --create-home")).toBeLessThan(script.indexOf("mkdir -p /home/devpipe/work"))
+    expect(script.indexOf("mkdir -p /home/devpipe/work")).toBeLessThan(
+      script.indexOf("chown devpipe:devpipe /home/devpipe/work"),
+    )
+  })
+
+  // A mkfs here is the one command in the script that destroys something
+  // irreplaceable. The volume is created with a filesystem already on it.
+  test("never formats anything", () => {
+    const script = cloudInit({ ...base, volumeName: "dp-1-main" })
+    // Comments stripped first — the script explains at length why it does not
+    // format, and the word appearing in that explanation is not a mkfs.
+    const commands = script
+      .split("\n")
+      .filter(line => !line.trimStart().startsWith("#"))
+      .join("\n")
+    expect(commands).not.toMatch(/\bmkfs\b/)
+  })
+})

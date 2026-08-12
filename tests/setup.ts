@@ -43,6 +43,7 @@ await migrate.up(db, "./migrations")
 // shows up as an unrelated test that only fails when run second.
 const TABLES = [
   "agent_logins",
+  "workspaces",
   "broadcast_recipients",
   "broadcasts",
   "claims",

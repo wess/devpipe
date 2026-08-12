@@ -9,6 +9,7 @@ import { audit } from "../util/audit.ts"
 import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
+import { claimForBox } from "../workspaces/index.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
 import * as ocean from "./digitalocean.ts"
@@ -24,6 +25,7 @@ const publicBox = (row: any) => ({
   ip: row.ip,
   shell: row.shell ?? "bash",
   synapse: Boolean(row.synapse),
+  workspace_id: row.workspace_id ?? null,
   tools: safeTools(row.manifest),
   created_at: row.created_at,
   ready_at: row.ready_at,
@@ -143,6 +145,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           tools?: string[]
           shell?: string
           synapse?: boolean
+          workspace_id?: number
         }
 
         const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
@@ -180,6 +183,16 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // that rather than being told about memory first. 402 rather than 403:
         // it is payment that is missing, and the client needs to tell those
         // apart to know whether to offer a checkout link.
+        // Before the subscription check and before the droplet: a workspace
+        // that is on another box, or in another region, is a refusal the person
+        // can act on, and finding out after a machine exists is worse.
+        let workspace: any = null
+        if (b.workspace_id) {
+          const claim = await claimForBox(db, me.id, Number(b.workspace_id), region)
+          if (!claim.ok) return json(c, 409, { error: claim.reason })
+          workspace = claim.workspace
+        }
+
         const gate = await requireSubscriptionForBox(db, me.id, size, Boolean(me.is_owner))
         if (!gate.ok) return json(c, 402, { error: gate.reason })
 
@@ -206,6 +219,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               hostname,
               shell,
               synapse: b.synapse ? 1 : 0,
+              workspace_id: workspace?.id ?? null,
               region,
               size,
               status: "creating",
@@ -277,6 +291,25 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           )
           await audit(db, me.id, "box.created", hostname)
 
+          // The workspace, before cloud-init gets far enough to mount it.
+          //
+          // Awaited rather than fired off: the box mounts by device path, and a
+          // volume that arrives after that step has run leaves the machine
+          // running on an empty directory — which looks exactly like an empty
+          // workspace, and is how somebody concludes their files are gone.
+          if (workspace) {
+            try {
+              await ocean.attachVolume(token, workspace.volume_id, droplet.id)
+            } catch (err) {
+              console.error("[devpipe] could not attach a workspace:", err)
+              await db.execute(
+                from("boxes")
+                  .where(q => q("id").equals(boxId))
+                  .update({ workspace_id: null, status_detail: "the workspace could not be attached" }),
+              )
+            }
+          }
+
           // DNS is what makes the certificate possible, so it happens as soon
           // as there is an address to point at — before the box has finished
           // installing, because Caddy will want it the moment it starts.
@@ -309,6 +342,21 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
 
         const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
         if (token && row.provider_id) {
+          // Detach first, and wait. A volume still attached to a droplet that
+          // no longer exists is not freed by the droplet going away: it keeps
+          // being charged for, belongs to nothing, and cannot be attached
+          // anywhere else. The whole promise of a workspace is that the box is
+          // the disposable half, so this is the step that has to be right.
+          if (row.workspace_id) {
+            const workspace = (await db.one(from("workspaces").where(q => q("id").equals(row.workspace_id)))) as any
+            if (workspace) {
+              try {
+                await ocean.detachVolume(token, workspace.volume_id, Number(row.provider_id))
+              } catch (err) {
+                console.error("[devpipe] could not detach a workspace before destroy:", err)
+              }
+            }
+          }
           try {
             await ocean.destroyDroplet(token, Number(row.provider_id))
           } catch (err) {

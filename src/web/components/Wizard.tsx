@@ -43,6 +43,11 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const [size, setSize] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [workspaces, setWorkspaces] = useState<api.Workspace[]>([])
+  const [workspaceId, setWorkspaceId] = useState<number | null>(null)
+  const [newWorkspace, setNewWorkspace] = useState(false)
+  const [workspaceName, setWorkspaceName] = useState("")
+  const [workspaceGb, setWorkspaceGb] = useState(10)
 
   const refreshBilling = useCallback(() => api.billingStatus().then(setBilling), [])
 
@@ -58,7 +63,25 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
     // An instance that sells nothing answers `configured: false`, and every
     // size stays available — so a failure here must not block the wizard.
     void refreshBilling().catch(() => {})
+    // Nobody has one on their first box, and an empty list is the normal case
+    // rather than a failure — so this never blocks the wizard either.
+    void api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => {})
   }, [refreshBilling])
+
+  /**
+   * A workspace decides the region, rather than the other way round.
+   *
+   * Block storage is pinned where it was made, so a box elsewhere cannot mount
+   * it. Letting both be picked freely means building the region control that
+   * says no — moving it is the same rule with nothing to refuse.
+   */
+  const chosen = workspaces.find(w => w.id === workspaceId) ?? null
+  useEffect(() => {
+    if (chosen && chosen.region !== region) setRegion(chosen.region)
+  }, [chosen, region])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -124,7 +147,31 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
     setBusy(true)
     setError(null)
     try {
-      const box = await api.createBox({ name, region, size, shell, synapse, tools: [...picked] })
+      // The workspace first, because the box asks for one by id. If this half
+      // fails there is no box and no charge; if it succeeded and the box did
+      // not, the workspace is in the list to pick next time rather than an
+      // orphan nobody can see.
+      let useWorkspace = workspaceId
+      if (newWorkspace) {
+        const made = await api.createWorkspace({
+          name: workspaceName.trim() || "main",
+          region,
+          size_gb: workspaceGb,
+        })
+        useWorkspace = made.id
+        setWorkspaces(list => [made, ...list])
+        setWorkspaceId(made.id)
+        setNewWorkspace(false)
+      }
+      const box = await api.createBox({
+        name,
+        region,
+        size,
+        shell,
+        synapse,
+        tools: [...picked],
+        workspace_id: useWorkspace,
+      })
       onCreated(box.id)
     } catch (e: any) {
       // 402 means the subscription this size needs is missing or was taken by
@@ -297,14 +344,105 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               </button>
             </div>
 
+            <h3>Storage</h3>
+            <p className="muted small">
+              A workspace keeps your files when the box goes. Without one, destroying a box takes the work on it with
+              the machine.
+            </p>
+            <div className="choice-grid">
+              <button
+                type="button"
+                className={`choice ${workspaceId === null && !newWorkspace ? "on" : ""}`}
+                onClick={() => {
+                  setWorkspaceId(null)
+                  setNewWorkspace(false)
+                }}
+              >
+                <strong>None</strong>
+                <span className="muted small">Files live on the box</span>
+              </button>
+              {workspaces.map(w => {
+                // Held by a live box: a volume mounts to one machine at a time,
+                // so this is not a thing to discover after paying for a box.
+                const held = w.attached_to !== null
+                return (
+                  <button
+                    type="button"
+                    key={w.id}
+                    disabled={held}
+                    className={`choice ${workspaceId === w.id ? "on" : ""} ${held ? "off" : ""}`}
+                    onClick={() => {
+                      setWorkspaceId(w.id)
+                      setNewWorkspace(false)
+                    }}
+                  >
+                    <strong>{w.name}</strong>
+                    <span className="muted small">
+                      {w.size_gb} GB · {catalog.regions.find(r => r.slug === w.region)?.label ?? w.region}
+                    </span>
+                    {held && <span className="muted small">On another box</span>}
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                className={`choice ${newWorkspace ? "on" : ""}`}
+                onClick={() => {
+                  setNewWorkspace(true)
+                  setWorkspaceId(null)
+                }}
+              >
+                <strong>New workspace</strong>
+                <span className="muted small">Made in {catalog.regions.find(r => r.slug === region)?.label}</span>
+              </button>
+            </div>
+
+            {newWorkspace && (
+              <div className="wizard-inline">
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    value={workspaceName}
+                    onChange={e => setWorkspaceName(e.target.value)}
+                    maxLength={40}
+                    placeholder="main"
+                  />
+                </label>
+                <label className="field">
+                  <span>Size</span>
+                  <select value={workspaceGb} onChange={e => setWorkspaceGb(Number(e.target.value))}>
+                    {[10, 25, 50, 100, 250].map(gb => (
+                      <option key={gb} value={gb}>
+                        {gb} GB · ${(gb * 0.1).toFixed(2)}/mo
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <small className="muted">
+                  Billed by the provider from the moment it exists, and it keeps costing while it holds your files —
+                  that is the point of it. Delete it when you are done with the work.
+                </small>
+              </div>
+            )}
+
             <h3>Region</h3>
-            <p className="muted small">Pick the one nearest you — it is the round trip you feel.</p>
+            {chosen ? (
+              <p className="muted small">
+                Fixed to {catalog.regions.find(r => r.slug === chosen.region)?.label ?? chosen.region} by the workspace
+                you picked — storage cannot move between regions.
+              </p>
+            ) : (
+              <p className="muted small">Pick the one nearest you — it is the round trip you feel.</p>
+            )}
             <div className="choice-grid">
               {catalog.regions.map(r => (
                 <button
                   type="button"
                   key={r.slug}
-                  className={`choice ${region === r.slug ? "on" : ""}`}
+                  disabled={chosen !== null && r.slug !== chosen.region}
+                  className={`choice ${region === r.slug ? "on" : ""} ${
+                    chosen !== null && r.slug !== chosen.region ? "off" : ""
+                  }`}
                   onClick={() => setRegion(r.slug)}
                 >
                   <strong>{r.label}</strong>
@@ -330,6 +468,14 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               <dd>{SHELLS[shell].label}</dd>
               <dt>Memory</dt>
               <dd>{synapse ? "Synapse, shared with your other machines" : "This box only"}</dd>
+              <dt>Storage</dt>
+              <dd>
+                {newWorkspace
+                  ? `New workspace "${workspaceName.trim() || "main"}" · ${workspaceGb} GB`
+                  : chosen
+                    ? `${chosen.name} · ${chosen.size_gb} GB`
+                    : "None — files go with the box"}
+              </dd>
               <dt>Region</dt>
               <dd>{catalog.regions.find(r => r.slug === region)?.label}</dd>
               <dt>Installing</dt>

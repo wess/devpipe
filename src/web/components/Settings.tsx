@@ -1,4 +1,4 @@
-import { Loader2, Monitor } from "lucide-react"
+import { HardDrive, Loader2, Monitor } from "lucide-react"
 import type React from "react"
 import { useCallback, useEffect, useState } from "react"
 import * as api from "../api.ts"
@@ -11,8 +11,20 @@ export const Settings: React.FC<{ onSaved?: (user: api.User) => void }> = ({ onS
   const [current, setCurrent] = useState("")
   const [next, setNext] = useState("")
   const [sessions, setSessions] = useState<Awaited<ReturnType<typeof api.listSessions>>>([])
+  const [workspaces, setWorkspaces] = useState<api.Workspace[]>([])
   const [note, setNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null)
+  const [confirming, setConfirming] = useState<number | null>(null)
+  const [typed, setTyped] = useState("")
   const [loading, setLoading] = useState(true)
+
+  const refreshWorkspaces = useCallback(
+    () =>
+      api
+        .listWorkspaces()
+        .then(setWorkspaces)
+        .catch(() => {}),
+    [],
+  )
 
   const refresh = useCallback(
     () =>
@@ -26,7 +38,28 @@ export const Settings: React.FC<{ onSaved?: (user: api.User) => void }> = ({ onS
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    void refreshWorkspaces()
+  }, [refresh, refreshWorkspaces])
+
+  /**
+   * Deleting a workspace, which is the only way to stop paying for one.
+   *
+   * The name is typed back, as it is for destroying a box: this is the storage
+   * that was kept precisely so a box could be destroyed without losing it, and
+   * it is the last copy. The server refuses while a box holds it, and says
+   * which one.
+   */
+  const removeWorkspace = async (w: api.Workspace) => {
+    try {
+      await api.deleteWorkspace(w.id)
+      setNote({ kind: "ok", text: `Deleted ${w.name}.` })
+      setConfirming(null)
+      setTyped("")
+      void refreshWorkspaces()
+    } catch (err: any) {
+      setNote({ kind: "bad", text: String(err.message) })
+    }
+  }
 
   const saveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -104,6 +137,81 @@ export const Settings: React.FC<{ onSaved?: (user: api.User) => void }> = ({ onS
           </label>
           <button type="submit">Change password</button>
         </form>
+      </section>
+
+      <section className="card">
+        <h2>Workspaces</h2>
+        <p className="muted small">
+          Storage that outlives a box. A workspace is charged from the moment it exists, whether or not a box is using
+          it — deleting it here is the only thing that stops that.
+        </p>
+        {workspaces.length === 0 ? (
+          <p className="muted small">
+            None yet. Add one while setting up a box, and the work on it survives destroying that box.
+          </p>
+        ) : (
+          <table>
+            <tbody>
+              {workspaces.map(w => (
+                <tr key={w.id}>
+                  <td>
+                    <HardDrive size={13} />
+                  </td>
+                  <td>
+                    <div>{w.name}</div>
+                    <div className="muted small">
+                      {w.size_gb} GB · {w.region} ·{" "}
+                      {w.attached_to !== null ? "in use by a box" : "not attached to anything"}
+                    </div>
+                  </td>
+                  <td className="right">
+                    {confirming === w.id ? (
+                      <span className="confirm-inline">
+                        <input
+                          value={typed}
+                          onChange={e => setTyped(e.target.value)}
+                          placeholder={w.name}
+                          aria-label={`Type ${w.name} to confirm`}
+                          autoCapitalize="none"
+                          spellCheck={false}
+                        />
+                        <button
+                          type="button"
+                          className="danger small"
+                          disabled={typed.trim() !== w.name}
+                          onClick={() => void removeWorkspace(w)}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() => {
+                            setConfirming(null)
+                            setTyped("")
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => {
+                          setConfirming(w.id)
+                          setTyped("")
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
 
       <section className="card">

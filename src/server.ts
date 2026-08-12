@@ -17,6 +17,7 @@ import { sweepRateLimits } from "./security/ratelimit.ts"
 import { terminalRoutes } from "./terminals/index.ts"
 import { userRoutes } from "./users/index.ts"
 import { waitlistRoutes } from "./waitlist/index.ts"
+import { workspaceRoutes } from "./workspaces/index.ts"
 
 /**
  * The Postgres the test suite already assumes, used when nothing else is
@@ -121,6 +122,7 @@ const baseFetch = router(
   ...sessionRoutes(db),
   ...userRoutes(db),
   ...boxRoutes(db, config.appUrl),
+  ...workspaceRoutes(db),
   ...billingRoutes(db, config.appUrl),
   ...terminalRoutes(db),
   ...adminRoutes(db),

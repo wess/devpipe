@@ -34,6 +34,8 @@ export const cloudInit = (opts: {
   shell?: string
   /** Whether this box carries the account's Synapse memory. */
   synapse?: boolean
+  /** DigitalOcean volume name, when a workspace is attached. */
+  volumeName?: string
 }): string => {
   const steps = resolve(opts.tools)
   // Only the logins for tools this box actually has. A watcher on a path that
@@ -187,6 +189,46 @@ grep -q devpipe-path /home/devpipe/.bashrc 2>/dev/null || \
   echo '. /etc/profile.d/devpipe-path.sh' >> /home/devpipe/.bashrc
 chown devpipe:devpipe /home/devpipe/.bashrc
 say "[ok] user devpipe"
+${
+  opts.volumeName
+    ? `
+phase "workspace" "Mounting your workspace"
+# Storage that was here before this box and will outlive it.
+#
+# After the account exists, not before. Mounting first means creating
+# /home/devpipe as root to hold the mountpoint, and useradd then declines to
+# fix a home directory it did not create — leaving the agent unable to write to
+# its own home, with a workspace it also does not own.
+#
+# Never formatted. The volume is created with a filesystem already on it, so
+# there is nothing here that needs to make one — and a mkfs on this path is the
+# one command in this whole script that destroys something irreplaceable. If the
+# device is missing the box carries on without it: an empty /home/devpipe/work
+# is a bad afternoon, a reformatted one is somebody's work gone.
+DEV=/dev/disk/by-id/scsi-0DO_Volume_${opts.volumeName}
+mkdir -p /home/devpipe/work
+for i in $(seq 1 30); do
+  [ -b "$DEV" ] && break
+  sleep 2
+done
+if [ -b "$DEV" ]; then
+  if mount -o discard,defaults,noatime "$DEV" /home/devpipe/work; then
+    # By id, not by device name: /dev/sda ordering is not stable across boots,
+    # and an fstab that mounts the wrong disk here is worse than one that fails.
+    grep -q "$DEV" /etc/fstab || echo "$DEV /home/devpipe/work ext4 discard,defaults,noatime,nofail 0 2" >> /etc/fstab
+    # The mounted root, not the mountpoint underneath it: a volume that has been
+    # on an earlier box comes with its own ownership, and a first-time one is
+    # root-owned from mkfs. Either way the agent has to own what it works in.
+    chown devpipe:devpipe /home/devpipe/work
+    say "[ok] workspace mounted at ~/work ($(df -h /home/devpipe/work | tail -1 | awk '{print $2}'))"
+  else
+    say "[!!] the workspace device is here but would not mount — leaving it alone rather than formatting it"
+  fi
+else
+  say "[!!] the workspace never appeared; this box has a plain ~/work directory"
+fi`
+    : ""
+}
 ${installs}
 
 phase "shell" "Setting your login shell"
