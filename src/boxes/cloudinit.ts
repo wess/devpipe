@@ -36,6 +36,15 @@ export const cloudInit = (opts: {
   synapse?: boolean
   /** DigitalOcean volume name, when a workspace is attached. */
   volumeName?: string
+  /**
+   * Tool ids already present in the image this box boots from.
+   *
+   * Passed rather than assumed: an image is baked at a point in time, and a
+   * tool added to the catalog afterwards is genuinely not on it. Taking the
+   * list from the catalog instead would skip installing something that is not
+   * there, which fails as "the tool is missing" long after the box came up.
+   */
+  preinstalled?: readonly string[]
 }): string => {
   const steps = resolve(opts.tools)
   // Only the logins for tools this box actually has. A watcher on a path that
@@ -47,7 +56,9 @@ export const cloudInit = (opts: {
   // Each install is allowed to fail without taking the box down with it. A
   // missing editor is a worse outcome as "the box never came up" than as
   // "that one tool is not there".
+  const baked = new Set(opts.preinstalled ?? [])
   const installs = steps
+    .filter(t => !baked.has(t.id))
     .map(
       t => `
 phase "${t.id}" "Installing ${t.name}"

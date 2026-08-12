@@ -13,6 +13,7 @@ import { claimForBox } from "../workspaces/index.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
 import * as ocean from "./digitalocean.ts"
+import { ASLEEP } from "./reclaim.ts"
 
 const publicBox = (row: any) => ({
   id: row.id,
@@ -61,6 +62,122 @@ export const convergeFirewall = async (db: Connection): Promise<boolean> => {
     console.error("[devpipe] could not converge the box firewall:", err)
     return false
   }
+}
+
+/**
+ * Builds the machine for a box row that already exists.
+ *
+ * Shared by creating a box and waking a sleeping one, because they are the same
+ * act: the row, the name, the tools and the workspace all persist, and what is
+ * being made is the droplet. Two copies of this would drift, and the half that
+ * drifts is the one nobody tests — a woken box quietly missing the firewall, or
+ * built from a stale image.
+ *
+ * Throws. The caller owns what a failure means, which differs: a failed create
+ * releases a subscription, a failed wake leaves the box asleep to try again.
+ */
+export const provision = async (
+  db: Connection,
+  opts: {
+    token: string
+    appUrl: string
+    boxId: number
+    userId: number
+    hostname: string
+    host: string
+    domain: string
+    region: string
+    size: string
+    tools: readonly string[]
+    shell: string
+    synapse: boolean
+    agentToken: string
+    workspace: any | null
+  },
+): Promise<number> => {
+  // Before the droplet, not after: the firewall is attached by tag, so it has
+  // to exist by the time a droplet carrying that tag does. Creating the box
+  // first would leave it briefly reachable on every port while cloud-init runs
+  // as root — which is the window an opportunistic scanner is looking for.
+  await ocean.ensureBoxFirewall(opts.token)
+
+  // The prebaked image, when there is one. Empty falls through to the
+  // provider's base image and a full install on first boot — slower, but a
+  // snapshot somebody deleted must not stop boxes being made.
+  const boxImage = (await getSetting(db, SETTING.boxImage)).trim()
+  const preinstalled = boxImage
+    ? (await getSetting(db, SETTING.boxImageTools))
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean)
+    : []
+
+  const droplet = await ocean.createDroplet(opts.token, {
+    name: opts.hostname,
+    region: opts.region,
+    size: opts.size,
+    ...(boxImage ? { image: boxImage } : {}),
+    userData: cloudInit({
+      preinstalled,
+      hostname: opts.hostname,
+      agentToken: opts.agentToken,
+      tools: opts.tools,
+      daemonUrl: await getSetting(db, SETTING.daemonUrl),
+      callbackUrl: `${opts.appUrl}/api/boxes/callback`,
+      logUrl: `${opts.appUrl}/api/boxes/callback/log`,
+      loginsUrl: `${opts.appUrl}/api/boxes/callback/logins`,
+      callbackSecret: opts.agentToken,
+      shell: opts.shell,
+      synapse: opts.synapse,
+      // Without this the mount block is never written, and the volume attaches
+      // to a box that has no idea it is there: ~/work is ordinary disk, and
+      // every file in it dies with the machine that was the disposable half.
+      volumeName: opts.workspace?.volume_name,
+    }),
+    // Without a key nobody can get onto a box that wedges during setup — the
+    // first real provisioning run hung and there was no way to look at it.
+    sshKeyIds: (await getSetting(db, SETTING.sshKeyIds))
+      .split(",")
+      .map(s => Number(s.trim()))
+      .filter(n => Number.isFinite(n) && n > 0),
+    // `devpipe` for inventory, `devpipe-box` for the firewall: the control
+    // plane wears the first, so rules hung on it reach a machine that is not
+    // a box.
+    tags: ["devpipe", ocean.BOX_TAG, `user-${opts.userId}`],
+  })
+
+  await db.execute(
+    from("boxes")
+      .where(q => q("id").equals(opts.boxId))
+      .update({ provider_id: String(droplet.id), status: "installing", last_active_at: new Date() }),
+  )
+
+  // The workspace, on its way while cloud-init installs.
+  //
+  // Started here but not waited for. Attaching takes tens of seconds and this
+  // is the request the wizard is blocked on, so awaiting it holds the dialog on
+  // "Creating…" for the whole attach. Nothing races: the mount is near the end
+  // of cloud-init, behind an apt run, and the script waits a further minute for
+  // the device before giving up.
+  if (opts.workspace) {
+    void ocean.attachVolume(opts.token, opts.workspace.volume_id, droplet.id).catch(async err => {
+      console.error("[devpipe] could not attach a workspace:", err)
+      // Said on the box rather than swallowed. A box that quietly has no
+      // workspace looks exactly like a workspace with nothing in it, which is
+      // how somebody concludes their files are gone.
+      await db.execute(
+        from("boxes")
+          .where(q => q("id").equals(opts.boxId))
+          .update({ workspace_id: null, status_detail: "the workspace could not be attached" }),
+      )
+    })
+  }
+
+  // DNS is what makes the certificate possible, so it happens as soon as there
+  // is an address to point at — before the box has finished installing, because
+  // Caddy will want it the moment it starts.
+  void settleAddress(db, opts.token, opts.boxId, droplet.id, opts.domain, opts.host)
+  return droplet.id
 }
 
 export const boxRoutes = (db: Connection, appUrl: string) => {
@@ -244,84 +361,23 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         }
 
         try {
-          // Before the droplet, not after: the firewall is attached by tag, so
-          // it has to exist by the time a droplet carrying that tag does.
-          // Creating the box first would leave it briefly reachable on every
-          // port while cloud-init runs as root — which is the window an
-          // opportunistic scanner is actually looking for.
-          //
-          // Inside the try deliberately. If this fails the box is marked failed
-          // and the subscription released; a box that could not be firewalled
-          // is not a box we should be handing to anyone.
-          await ocean.ensureBoxFirewall(token)
-
-          const droplet = await ocean.createDroplet(token, {
-            name: hostname,
+          await provision(db, {
+            token,
+            appUrl,
+            boxId,
+            userId: me.id,
+            hostname,
+            host,
+            domain,
             region,
             size,
-            userData: cloudInit({
-              hostname,
-              agentToken,
-              tools,
-              daemonUrl: await getSetting(db, SETTING.daemonUrl),
-              callbackUrl: `${appUrl}/api/boxes/callback`,
-              logUrl: `${appUrl}/api/boxes/callback/log`,
-              loginsUrl: `${appUrl}/api/boxes/callback/logins`,
-              callbackSecret: agentToken,
-              shell,
-              synapse: Boolean(b.synapse),
-              // Without this the mount block is never written, and the volume
-              // attaches to a box that has no idea it is there: ~/work is
-              // ordinary disk, and every file in it dies with the machine that
-              // was supposed to be the disposable half.
-              volumeName: workspace?.volume_name,
-            }),
-            // Without a key nobody can get onto a box that wedges during
-            // setup — the first real provisioning run hung and there was no
-            // way to look at it.
-            sshKeyIds: (await getSetting(db, SETTING.sshKeyIds))
-              .split(",")
-              .map(s => Number(s.trim()))
-              .filter(n => Number.isFinite(n) && n > 0),
-            // `devpipe` for inventory, `devpipe-box` for the firewall: the
-            // control plane wears the first, so rules hung on it reach a
-            // machine that is not a box.
-            tags: ["devpipe", ocean.BOX_TAG, `user-${me.id}`],
+            tools,
+            shell,
+            synapse: Boolean(b.synapse),
+            agentToken,
+            workspace,
           })
-
-          await db.execute(
-            from("boxes")
-              .where(q => q("id").equals(boxId))
-              .update({ provider_id: String(droplet.id), status: "installing" }),
-          )
           await audit(db, me.id, "box.created", hostname)
-
-          // The workspace, on its way while cloud-init installs.
-          //
-          // Started here but not waited for. Attaching takes tens of seconds and
-          // this is the request the wizard is blocked on, so awaiting it holds
-          // the dialog on "Creating…" for the whole attach. Nothing races: the
-          // mount is near the end of cloud-init, behind an apt run, and the
-          // script waits a further minute for the device before giving up.
-          if (workspace) {
-            void ocean.attachVolume(token, workspace.volume_id, droplet.id).catch(async err => {
-              console.error("[devpipe] could not attach a workspace:", err)
-              // Said on the box rather than swallowed. A box that quietly has no
-              // workspace looks exactly like a workspace with nothing in it,
-              // which is how somebody concludes their files are gone.
-              await db.execute(
-                from("boxes")
-                  .where(q => q("id").equals(boxId))
-                  .update({ workspace_id: null, status_detail: "the workspace could not be attached" }),
-              )
-            })
-          }
-
-          // DNS is what makes the certificate possible, so it happens as soon
-          // as there is an address to point at — before the box has finished
-          // installing, because Caddy will want it the moment it starts.
-          void settleAddress(db, token, boxId, droplet.id, domain, host)
-
           return json(c, 201, { id: boxId, hostname, status: "installing" })
         } catch (err: any) {
           await db.execute(
@@ -332,6 +388,82 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           // A box that never came up must not hold a subscription hostage.
           await releaseSubscription(db, boxId)
           return json(c, 502, { error: String(err?.message ?? "Could not create that box.") })
+        }
+      }),
+    ),
+
+    /**
+     * Building the machine back for a box that was reclaimed while idle.
+     *
+     * Not "create a new box like the old one" — the row, the name, the tools
+     * and the workspace are all still here. Only the droplet was given back,
+     * which is the only part that was being charged for by the hour.
+     */
+    post(
+      "/boxes/:id/wake",
+      authed(async c => {
+        const me = currentUser(c)
+        const row = (await db.one(
+          from("boxes")
+            .where(q => q("id").equals(Number(c.params.id)))
+            .where(q => q("user_id").equals(me.id))
+            .where(q => q("destroyed_at").isNull()),
+        )) as any
+        if (!row) return json(c, 404, { error: "No such box." })
+        if (row.status !== ASLEEP) {
+          return json(c, 409, { error: "That box is already awake." })
+        }
+
+        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+        if (!token) return json(c, 503, { error: "No provider is configured yet." })
+
+        // The workspace has to still be free. It is normally still attached to
+        // nothing, but somebody can have given it to another box while this one
+        // slept, and waking into a workspace already mounted elsewhere is the
+        // one thing block storage will not do.
+        let workspace: any = null
+        if (row.workspace_id) {
+          const claim = await claimForBox(db, me.id, row.workspace_id, row.region)
+          if (!claim.ok) return json(c, 409, { error: claim.reason })
+          workspace = claim.workspace
+        }
+
+        const domain = await getSetting(db, SETTING.domain)
+        await db.execute(
+          from("boxes")
+            .where(q => q("id").equals(row.id))
+            .update({ status: "creating", status_detail: "" }),
+        )
+        try {
+          await provision(db, {
+            token,
+            appUrl,
+            boxId: row.id,
+            userId: me.id,
+            hostname: row.hostname,
+            host: row.hostname.replace(`.${domain}`, ""),
+            domain,
+            region: row.region,
+            size: row.size,
+            tools: safeTools(row.manifest),
+            shell: row.shell ?? "bash",
+            synapse: Boolean(row.synapse),
+            // The same token the daemon was built with, so a client holding the
+            // old connection details is not silently locked out of its own box.
+            agentToken: row.agent_token,
+            workspace,
+          })
+          await audit(db, me.id, "box.woken", row.hostname)
+          return json(c, 200, { id: row.id, hostname: row.hostname, status: "installing" })
+        } catch (err: any) {
+          // Back to asleep rather than failed. Nothing was lost, the workspace
+          // is still there, and trying again is the obvious next move.
+          await db.execute(
+            from("boxes")
+              .where(q => q("id").equals(row.id))
+              .update({ status: ASLEEP, status_detail: String(err?.message ?? "could not wake").slice(0, 200) }),
+          )
+          return json(c, 502, { error: String(err?.message ?? "Could not wake that box.") })
         }
       }),
     ),

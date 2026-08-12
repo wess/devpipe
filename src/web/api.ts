@@ -218,6 +218,8 @@ export const createBox = (input: {
   workspace_id?: number | null
 }) => call<{ id: number; hostname: string; status: string }>("POST", "/boxes", input)
 export const destroyBox = (id: number) => call("DELETE", `/boxes/${id}`)
+export const wakeBox = (id: number) =>
+  call<{ id: number; hostname: string; status: string }>("POST", `/boxes/${id}/wake`)
 
 export const listWorkspaces = () => call<Workspace[]>("GET", "/workspaces")
 export const createWorkspace = (input: { name: string; region: string; size_gb: number }) =>

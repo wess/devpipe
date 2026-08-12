@@ -4,6 +4,7 @@ import {
   CreditCard,
   Loader2,
   LogOut,
+  Moon,
   Plus,
   Server,
   Settings as SettingsIcon,
@@ -440,6 +441,24 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
     if (activeSession === sid) setActiveSession(list[0]?.id ?? null)
   }
 
+  /**
+   * Building the machine back for a box that was reclaimed while idle.
+   *
+   * Leaves it selected rather than jumping away: the setup screen it lands on
+   * is the same one a new box shows, and watching it come back is the point.
+   */
+  const wake = async (target: api.Box) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.wakeBox(target.id)
+      await refreshBoxes()
+    } catch (e: any) {
+      setError(String(e.message))
+    }
+    setBusy(false)
+  }
+
   const destroyBox = async (target: api.Box) => {
     setBusy(true)
     try {
@@ -469,7 +488,11 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           {boxes.map(b => (
             <div key={b.id} className={`row ${activeBox === b.id ? "on" : ""}`}>
               <button type="button" className="row-main" onClick={() => setActiveBox(b.id)}>
-                <Server size={13} className={b.status === "ready" ? "ok" : "pending"} />
+                {b.status === "asleep" ? (
+                  <Moon size={13} className="dim" />
+                ) : (
+                  <Server size={13} className={b.status === "ready" ? "ok" : "pending"} />
+                )}
                 <span className="row-body">
                   <strong>{b.name}</strong>
                   <span className="muted small">{b.status === "ready" ? b.hostname : b.status}</span>
@@ -581,6 +604,21 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
               onStatus={setStatus}
               onResize={onTerminalResize}
             />
+          ) : box && box.status === "asleep" ? (
+            // Reclaimed while idle. This screen exists so that reads as a thing
+            // the product did on purpose rather than a box that went missing —
+            // and the first thing it says is that the files are still there.
+            <div className="empty">
+              <Moon size={28} />
+              <p>{box.name} is asleep.</p>
+              <p className="muted small">
+                It was not being used, so the machine was given back and stopped costing anything. Everything in your
+                workspace is exactly where you left it.
+              </p>
+              <button type="button" disabled={busy} onClick={() => void wake(box)}>
+                {busy ? "Waking…" : "Wake it up"}
+              </button>
+            </div>
           ) : box && box.status !== "ready" ? (
             // A box that is still building gets the whole pane. It is the only
             // thing happening, and it is the thing the user is waiting on.

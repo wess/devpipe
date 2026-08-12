@@ -119,6 +119,36 @@ export const destroyDroplet = async (token: string, id: number): Promise<void> =
   await request(token, `/droplets/${id}`, { method: "DELETE" })
 }
 
+/**
+ * Snapshots a powered-off droplet and waits for the image to exist.
+ *
+ * Waited on rather than fired off: the caller's next act is to destroy the
+ * droplet this was taken from, and a snapshot action that is still running when
+ * its source disappears is a snapshot that does not finish.
+ */
+export const snapshotDroplet = async (token: string, id: number, name: string): Promise<number> => {
+  const body: any = await request(token, `/droplets/${id}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ type: "snapshot", name }),
+  })
+  const actionId = body?.action?.id
+  if (!actionId) throw new Error("DigitalOcean did not start the snapshot.")
+
+  // Snapshots of a several-gigabyte disk take minutes, not seconds.
+  for (let i = 0; i < 120; i++) {
+    const status: any = await request(token, `/droplets/${id}/actions/${actionId}`)
+    const state = status?.action?.status
+    if (state === "completed") break
+    if (state === "errored") throw new Error("DigitalOcean could not take that snapshot.")
+    await new Promise(resolve => setTimeout(resolve, 10_000))
+  }
+
+  const images: any = await request(token, "/images?private=true&per_page=200")
+  const image = (images?.images ?? []).find((i: any) => i.name === name)
+  if (!image) throw new Error("The snapshot completed but no image with that name appeared.")
+  return image.id as number
+}
+
 // ---- Firewall -------------------------------------------------------------
 
 /**

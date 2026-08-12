@@ -30,6 +30,20 @@ export const SETTING = {
    * product would mention it until the invoice.
    */
   freeMaxSize: "boxes_free_max_size",
+  /**
+   * Provider image new boxes are built from. Empty means the plain base image
+   * and a full install on first boot, which is the correct fallback: a missing
+   * or deleted snapshot must produce a slow box, never a broken one.
+   */
+  boxImage: "boxes_image",
+  /** Tool ids baked into that image, so cloud-init knows what to skip. */
+  boxImageTools: "boxes_image_tools",
+  /**
+   * Hours a box may sit unused before it is reclaimed. 0 disables it.
+   *
+   * Only ever applies to boxes carrying a workspace — see `reclaim.ts`.
+   */
+  idleHours: "boxes_idle_hours",
 } as const
 
 const DEFAULTS: Record<string, string> = {
@@ -44,6 +58,12 @@ const DEFAULTS: Record<string, string> = {
   // The cheapest size. Deliberately the floor rather than the ceiling: an
   // instance giving boxes away should have to raise this on purpose.
   [SETTING.freeMaxSize]: "s-1vcpu-1gb",
+  [SETTING.boxImage]: "",
+  [SETTING.boxImageTools]: "",
+  // Off until somebody turns it on. Reclaiming a box is the right economics and
+  // the wrong surprise, so it is never the default on an instance that has not
+  // been told how long "idle" means.
+  [SETTING.idleHours]: "0",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.sshKeyIds]: "",
   // A percentage on top of what the provider charges. 100 means the customer

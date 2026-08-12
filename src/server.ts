@@ -8,6 +8,7 @@ import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
 import { billingRoutes } from "./billing/index.ts"
 import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
+import { reclaimIdle } from "./boxes/reclaim.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
 import { claimRoutes } from "./claims/index.ts"
 import { createEmailer } from "./email/index.ts"
@@ -189,11 +190,23 @@ const egress = setInterval(() => {
 }, 3_600_000)
 egress.unref()
 
+// Boxes nobody is using, given back.
+//
+// Every fifteen minutes rather than hourly: the saving is proportional to how
+// promptly an idle box is noticed, and the check is one indexed query plus one
+// request per candidate. Does nothing at all until somebody sets the idle hours,
+// and never touches a box without a workspace.
+const reclaim = setInterval(() => {
+  void reclaimIdle(db).catch(err => console.error("[devpipe] idle reclaim:", err))
+}, 900_000)
+reclaim.unref()
+
 const shutdown = async (signal: string) => {
   try {
     clearInterval(sweeper)
     clearInterval(firewall)
     clearInterval(egress)
+    clearInterval(reclaim)
     await server.stop(false)
     await db.close()
   } catch (err) {

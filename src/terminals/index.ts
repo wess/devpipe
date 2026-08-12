@@ -16,13 +16,31 @@ import { loginShell } from "../util/shell.ts"
  * single point of failure for sessions that are supposed to outlive it.
  */
 
-const boxFor = async (db: Connection, userId: number, id: number) =>
-  (await db.one(
+const boxFor = async (db: Connection, userId: number, id: number) => {
+  const box = (await db.one(
     from("boxes")
       .where(q => q("id").equals(id))
       .where(q => q("user_id").equals(userId))
       .where(q => q("destroyed_at").isNull()),
   )) as any
+  // Every route in this file is somebody using the box, so this is the honest
+  // place to record it: reaching for a terminal, listing them, or opening a
+  // connection all mean the same thing to the sweep that reclaims idle boxes.
+  //
+  // Not awaited. Nothing here should get slower to keep a timestamp current,
+  // and a missed touch costs at worst one early sleep on a box whose files are
+  // on a workspace by definition.
+  if (box) {
+    void db
+      .execute(
+        from("boxes")
+          .where(q => q("id").equals(box.id))
+          .update({ last_active_at: new Date() }),
+      )
+      .catch(() => {})
+  }
+  return box
+}
 
 /**
  * A box that answered, and refused.

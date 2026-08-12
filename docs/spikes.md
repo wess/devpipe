@@ -304,3 +304,41 @@ A box goes from nothing to a working terminal in about two minutes.
   its children. Fixing that means moving them out of the process.
 - **Everything runs as root** on the box.
 - **The worst-case render ceiling** (see Spike 0).
+
+## Firecracker microVMs, for a free tier
+
+Measured on a DigitalOcean `s-2vcpu-4gb` in nyc3, Firecracker v1.16.1, 512MB
+guest, on 2026-08-12. The lab droplet was destroyed afterwards.
+
+| | |
+|---|---|
+| `/dev/kvm` on an ordinary droplet | **present**, `vmx` available |
+| cold boot to guest kernel | 238–274 ms (5 runs, ~240 median) |
+| snapshot a running microVM | ~1.7 s |
+| restore from snapshot | **20–26 ms** (5 runs) |
+| snapshot memory file | 513 MB raw — exactly guest RAM, not sparse |
+| the same file gzipped | 5.3 MB |
+
+Nested virtualisation working on stock droplets was the fact the whole idea
+depended on, and it was the one most likely to kill it. It does not.
+
+**Restore at ~22ms is what makes a free tier possible.** It is faster than the
+page that triggers it, so a free box can be put away after minutes of idleness
+rather than hours, and memory is only spent on people actually typing.
+
+**Packing without snapshotting is not worth building.** Twelve resident 512MB
+guests on a $48 host is $4/seat, which is the cheapest droplet — an entire
+virtualisation subsystem to save nothing. The economics come from the snapshots,
+not the density. See `src/boxes/microvm.ts`, where that is asserted rather than
+remembered.
+
+The 5.3MB compressed figure is a freshly booted guest, which is almost all zero
+pages; a guest somebody has worked in will not compress nearly as well. The
+sizing code assumes 8x and should be treated as optimistic until measured
+against a real workload.
+
+Still needed before this serves anyone: a guest rootfs carrying the agent
+tooling, and the control-plane half that places boxes on hosts and routes
+connections to them. `deploy/firecracker-host.sh` provisions a capable host and
+was verified end to end, including booting a guest to userspace under the
+systemd unit it installs, with CPU and memory limits applied.
