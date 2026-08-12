@@ -54,11 +54,35 @@ const key = async (): Promise<CryptoKey> => {
 
 export const secretsAvailable = (): boolean => Boolean(process.env.DEVPIPE_SECRET_KEY)
 
+/**
+ * Optional additional authenticated data: context the ciphertext is *bound* to.
+ *
+ * Encryption alone stops a value being read from a backup. It does not stop a
+ * sealed value being **moved** — copy another user's row into your own vault
+ * entry and the app decrypts it for you, because the bytes are still valid
+ * under the same key. Binding the ciphertext to who and where it belongs is
+ * what closes that, and it is only meaningful if the caller passes the same
+ * context to `open`: a mismatch fails the authentication tag rather than
+ * returning the wrong plaintext.
+ *
+ * Pass a stable, canonical string — `vault:<user>:<scope>:<scope_id>:<name>`
+ * rather than anything ordering- or formatting-dependent, because a value
+ * sealed under one spelling cannot be opened under another.
+ */
+export type Context = string | undefined
+
+const aad = (context: Context): Uint8Array<ArrayBuffer> | undefined =>
+  context === undefined ? undefined : (new TextEncoder().encode(context) as Uint8Array<ArrayBuffer>)
+
 /** `v1.<nonce>.<ciphertext>`, both base64. */
-export const seal = async (plaintext: string): Promise<string> => {
+export const seal = async (plaintext: string, context?: Context): Promise<string> => {
   const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES))
   const data = new TextEncoder().encode(plaintext)
-  const box = await crypto.subtle.encrypt({ name: ALGORITHM, iv: nonce }, await key(), data)
+  const box = await crypto.subtle.encrypt(
+    { name: ALGORITHM, iv: nonce, additionalData: aad(context) },
+    await key(),
+    data,
+  )
   return `${VERSION}.${b64(nonce)}.${b64(new Uint8Array(box))}`
 }
 
@@ -69,11 +93,15 @@ export const seal = async (plaintext: string): Promise<string> => {
  * propagate — it is a login that has to be done again, which is exactly what
  * happens if the caller treats null as "nothing stored".
  */
-export const open = async (sealed: string): Promise<string | null> => {
+export const open = async (sealed: string, context?: Context): Promise<string | null> => {
   const [version, nonce, body] = sealed.split(".")
   if (version !== VERSION || !nonce || !body) return null
   try {
-    const plain = await crypto.subtle.decrypt({ name: ALGORITHM, iv: unb64(nonce) }, await key(), unb64(body))
+    const plain = await crypto.subtle.decrypt(
+      { name: ALGORITHM, iv: unb64(nonce), additionalData: aad(context) },
+      await key(),
+      unb64(body),
+    )
     return new TextDecoder().decode(plain)
   } catch {
     return null

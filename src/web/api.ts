@@ -375,3 +375,33 @@ export const adminSendBroadcast = (id: number, confirm: string) =>
 export const adminDeleteBroadcast = (id: number) => call("DELETE", `/admin/broadcasts/${id}`)
 
 export const joinWaitlist = (email: string) => call("POST", "/waitlist", { email })
+
+export type VaultScope = "global" | "workspace" | "box"
+export type VaultKind = "value" | "secret"
+
+export type VaultEntry = {
+  scope: VaultScope
+  scope_id: number
+  name: string
+  kind: VaultKind
+  updated_at: string
+  last_used_at: string | null
+}
+
+export const listVault = () => call<VaultEntry[]>("GET", "/vault")
+export const putVaultEntry = (input: {
+  scope: VaultScope
+  scope_id: number
+  name: string
+  kind: VaultKind
+  value: string
+}) => call<{ ok: true }>("POST", "/vault", input)
+/**
+ * The one call that returns plaintext. Audited server-side every time and rate
+ * limited harder than writing, so the UI asks for it on demand rather than
+ * pre-loading values it might not need.
+ */
+export const revealVaultEntry = (scope: VaultScope, scopeId: number, name: string) =>
+  call<{ name: string; kind: VaultKind; value: string }>("GET", `/vault/${scope}/${scopeId}/${name}`)
+export const deleteVaultEntry = (scope: VaultScope, scopeId: number, name: string) =>
+  call("DELETE", `/vault/${scope}/${scopeId}/${name}`)

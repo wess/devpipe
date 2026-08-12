@@ -18,6 +18,8 @@ import { sweepRateLimits } from "./security/ratelimit.ts"
 import { terminalRoutes } from "./terminals/index.ts"
 import { userRoutes } from "./users/index.ts"
 import { waitlistRoutes } from "./waitlist/index.ts"
+import { boxVaultRoutes } from "./vault/box.ts"
+import { vaultRoutes } from "./vault/index.ts"
 import { workspaceRoutes } from "./workspaces/index.ts"
 
 /**
@@ -124,6 +126,8 @@ const baseFetch = router(
   ...userRoutes(db),
   ...boxRoutes(db, config.appUrl),
   ...workspaceRoutes(db),
+  ...vaultRoutes(db),
+  ...boxVaultRoutes(db),
   ...billingRoutes(db, config.appUrl),
   ...terminalRoutes(db),
   ...adminRoutes(db),

@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from "react"
  * tab set; a library for that is more surface than the problem has.
  */
 
-export type View = "workspace" | "billing" | "settings" | "admin"
+export type View = "workspace" | "billing" | "settings" | "vault" | "admin"
 
 export const ADMIN_TABS = [
   "overview",
@@ -45,6 +45,7 @@ export const parse = (pathname: string): Route => {
   const [head, next] = pathname.split("/").filter(Boolean)
   if (head === "billing") return { view: "billing", tab: DEFAULT_TAB }
   if (head === "settings") return { view: "settings", tab: DEFAULT_TAB }
+  if (head === "vault") return { view: "vault", tab: DEFAULT_TAB }
   if (head === "admin") {
     return { view: "admin", tab: ADMIN_TABS.find(t => t === next) ?? DEFAULT_TAB }
   }

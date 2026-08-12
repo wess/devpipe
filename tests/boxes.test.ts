@@ -307,3 +307,99 @@ describe("mounting a workspace", () => {
     expect(commands).not.toMatch(/\bmkfs\b/)
   })
 })
+
+describe("the box's vault credential reaches the box", () => {
+  // The lesson from the workspace volume: a feature can be complete, tested and
+  // completely inert because the one option that switches it on was never
+  // passed to the script that acts on it. These assert the wiring, not the
+  // behaviour.
+  const base = {
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["bun"] as const,
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
+    callbackSecret: "secret",
+  }
+
+  test("writes the credential when one is supplied", () => {
+    const script = cloudInit({
+      ...base,
+      vaultToken: "vault-token-not-real",
+      vaultUrl: "https://example.com/api/box/vault",
+    })
+    expect(script).toContain("/etc/devpipe/vault.env")
+    expect(script).toContain("DEVPIPE_VAULT_TOKEN=vault-token-not-real")
+    expect(script).toContain("DEVPIPE_VAULT_URL=https://example.com/api/box/vault")
+  })
+
+  test("is readable by the box's user, not root-only", () => {
+    // 0600 would be tidier and would also mean the agent — the only thing that
+    // needs it — cannot read it, so the vault would be unusable from the box.
+    const script = cloudInit({
+      ...base,
+      vaultToken: "t",
+      vaultUrl: "https://example.com/api/box/vault",
+    })
+    expect(script).toContain("chown root:devpipe /etc/devpipe/vault.env")
+    expect(script).toContain("chmod 0640 /etc/devpipe/vault.env")
+  })
+
+  test("is exported to login shells", () => {
+    const script = cloudInit({
+      ...base,
+      vaultToken: "t",
+      vaultUrl: "https://example.com/api/box/vault",
+    })
+    expect(script).toContain("/etc/profile.d/devpipe-vault.sh")
+  })
+
+  test("writes nothing at all when no credential is supplied", () => {
+    // An older box, or any path that forgets to thread it through, must not end
+    // up with an empty token file that looks configured and authenticates as
+    // nothing.
+    const script = cloudInit(base)
+    expect(script).not.toContain("vault.env")
+    expect(script).not.toContain("DEVPIPE_VAULT_TOKEN")
+  })
+})
+
+describe("the devpipe CLI reaches the box", () => {
+  const base = {
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["bun"] as const,
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
+    callbackSecret: "secret",
+    vaultToken: "t",
+    vaultUrl: "https://example.com/api/box/vault",
+  }
+
+  test("downloads the binary and makes it executable", () => {
+    const script = cloudInit({ ...base, cliUrl: "https://example.com/dist/devpipe" })
+    expect(script).toContain("https://example.com/dist/devpipe")
+    expect(script).toContain("chmod 0755 /usr/local/bin/devpipe")
+  })
+
+  test("registers it as an MCP server for the box user", () => {
+    // Without this an agent has the vault available and no way to discover it,
+    // which is the same as not shipping it.
+    const script = cloudInit({ ...base, cliUrl: "https://example.com/dist/devpipe" })
+    expect(script).toContain("/home/devpipe/.config/claude/mcp.json")
+    expect(script).toContain('"args": ["mcp"]')
+    // The box user's config, not root's: the daemon runs as root and this is
+    // not the daemon's tool.
+    expect(script).toContain("sudo -u devpipe")
+  })
+
+  test("is skipped entirely when no CLI url is configured", () => {
+    const script = cloudInit(base)
+    expect(script).not.toContain("/usr/local/bin/devpipe\n")
+    expect(script).not.toContain("mcp.json")
+  })
+})

@@ -30,6 +30,19 @@ export const cloudInit = (opts: {
   /** Where a box fetches and stores the account's agent logins. */
   loginsUrl: string
   callbackSecret: string
+  /**
+   * The box's vault credential, and where to spend it.
+   *
+   * Readable by the box's user rather than root-only, because the thing that
+   * needs it is the agent, and an agent that cannot read it cannot use the
+   * vault at all. That is not a weakness being accepted quietly: this token
+   * authorises one box's own scope chain, never reads a secret it was not
+   * explicitly granted, and dies with the box. See `src/vault/box.ts`.
+   */
+  vaultToken?: string
+  vaultUrl?: string
+  /** Where the box fetches the `devpipe` CLI and MCP server. */
+  cliUrl?: string
   /** Login shell for the box's user. Bash when unset. */
   shell?: string
   /** Whether this box carries the account's Synapse memory. */
@@ -238,6 +251,46 @@ if [ -b "$DEV" ]; then
 else
   say "[!!] the workspace never appeared; this box has a plain ~/work directory"
 fi`
+    : ""
+}
+${
+  opts.vaultToken && opts.vaultUrl
+    ? `
+phase "vault" "Wiring this box into your vault"
+mkdir -p /etc/devpipe
+cat > /etc/devpipe/vault.env <<'VAULTEOF'
+DEVPIPE_VAULT_URL=${opts.vaultUrl}
+DEVPIPE_VAULT_TOKEN=${opts.vaultToken}
+VAULTEOF
+# 0640 root:devpipe, not 0600 root-only. The agent is what needs this, and a
+# credential it cannot read is a vault it cannot use. Narrow rather than hidden:
+# this token reaches one box's own scope chain, never reads a secret it was not
+# granted, and stops working the moment the box is destroyed.
+chown root:devpipe /etc/devpipe/vault.env
+chmod 0640 /etc/devpipe/vault.env
+# Exported for login shells so \`devpipe\` and its MCP server just work, without
+# every agent having to be told where the credential lives.
+cat > /etc/profile.d/devpipe-vault.sh <<'VAULTSHEOF'
+set -a
+[ -r /etc/devpipe/vault.env ] && . /etc/devpipe/vault.env
+set +a
+VAULTSHEOF
+chmod 0644 /etc/profile.d/devpipe-vault.sh
+say "[ok] vault credential installed"
+${
+  opts.cliUrl
+    ? `curl -fsSL "${opts.cliUrl}" -o /usr/local/bin/devpipe
+chmod 0755 /usr/local/bin/devpipe
+# Registered for Claude Code so an agent finds the vault without being told it
+# exists. Written to the box user's config rather than a system path: this is
+# their tool, and the daemon runs as root.
+sudo -u devpipe mkdir -p /home/devpipe/.config/claude
+sudo -u devpipe tee /home/devpipe/.config/claude/mcp.json >/dev/null <<'MCPEOF'
+{ "mcpServers": { "devpipe": { "command": "/usr/local/bin/devpipe", "args": ["mcp"] } } }
+MCPEOF
+say "[ok] devpipe CLI installed ($(stat -c %s /usr/local/bin/devpipe) bytes)"`
+    : ""
+}`
     : ""
 }
 ${installs}

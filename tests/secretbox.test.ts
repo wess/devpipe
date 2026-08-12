@@ -71,3 +71,41 @@ describe("an instance with no key", () => {
     process.env.DEVPIPE_SECRET_KEY = had
   })
 })
+
+describe("binding a value to where it belongs", () => {
+  // Encryption stops a value being read out of a backup. It does not stop a
+  // sealed value being *moved* — and in a vault, where the row's scope decides
+  // who may read it, moving a row is the whole attack.
+
+  test("opens only with the context it was sealed under", async () => {
+    const sealed = await seal("sk-live-not-real", "vault:v1:1:global:0:STRIPE")
+    expect(await open(sealed, "vault:v1:1:global:0:STRIPE")).toBe("sk-live-not-real")
+  })
+
+  test("another user's row does not decrypt in your entry", async () => {
+    // The row copied verbatim into user 2's vault. Same key, same bytes.
+    const theirs = await seal("their-key", "vault:v1:1:global:0:OPENAI")
+    expect(await open(theirs, "vault:v1:2:global:0:OPENAI")).toBeNull()
+  })
+
+  test("a row cannot be moved to a wider scope", async () => {
+    // Promoting a box-scoped entry to global would hand it to every box.
+    const boxed = await seal("box-only", "vault:v1:1:box:42:TOKEN")
+    expect(await open(boxed, "vault:v1:1:global:0:TOKEN")).toBeNull()
+    expect(await open(boxed, "vault:v1:1:box:43:TOKEN")).toBeNull()
+  })
+
+  test("a row cannot be renamed into another name's slot", async () => {
+    const sealed = await seal("value-of-A", "vault:v1:1:global:0:A")
+    expect(await open(sealed, "vault:v1:1:global:0:B")).toBeNull()
+  })
+
+  test("an unbound value does not open as a bound one, or the reverse", async () => {
+    // The two forms are not interchangeable: agent logins seal without context
+    // and must not be openable by guessing a vault context, nor vice versa.
+    const unbound = await seal("plain")
+    expect(await open(unbound, "vault:v1:1:global:0:X")).toBeNull()
+    const bound = await seal("scoped", "vault:v1:1:global:0:X")
+    expect(await open(bound)).toBeNull()
+  })
+})

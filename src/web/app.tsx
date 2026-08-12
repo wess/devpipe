@@ -2,6 +2,7 @@ import {
   ChevronLeft,
   CircleDot,
   CreditCard,
+  KeyRound,
   Loader2,
   LogOut,
   Moon,
@@ -23,6 +24,7 @@ import { BoxSetup } from "./components/BoxSetup.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { Settings } from "./components/Settings.tsx"
 import { TerminalView } from "./components/TerminalView.tsx"
+import { Vault } from "./components/Vault.tsx"
 import { Wizard } from "./components/Wizard.tsx"
 import { href, type Route, useRoute, WORKSPACE_PATH } from "./routes.ts"
 import { gridFor } from "./terminal/metrics.ts"
@@ -989,6 +991,9 @@ const App: React.FC = () => {
             <Shield size={14} /> Admin
           </button>
         )}
+        <button type="button" className={`ghost small ${route.view === "vault" ? "on" : ""}`} onClick={to("vault")}>
+          <KeyRound size={14} /> Vault
+        </button>
         <button type="button" className={`ghost small ${route.view === "billing" ? "on" : ""}`} onClick={to("billing")}>
           <CreditCard size={14} /> Billing
         </button>
@@ -1032,6 +1037,7 @@ const App: React.FC = () => {
       )}
       {route.view === "workspace" && <Workspace vtReady={ready} />}
       {route.view === "billing" && <Billing />}
+      {route.view === "vault" && <Vault />}
       {route.view === "settings" && <Settings onSaved={setUser} />}
       {route.view === "admin" && <Admin tab={route.tab} onTab={tab => go({ view: "admin", tab })} />}
     </div>
