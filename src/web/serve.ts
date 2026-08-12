@@ -57,7 +57,23 @@ if (!wasmBytes) {
 const wasmEtag = wasmBytes ? `"${Bun.hash(new Uint8Array(wasmBytes)).toString(16)}"` : '""'
 
 /** Static pages that sit next to the lander in `site/`. */
-const PAGES = new Set(["/terms.html", "/privacy.html", "/aup.html"])
+const PAGES = new Set([
+  "/terms.html",
+  "/privacy.html",
+  "/aup.html",
+  "/asylum.html",
+  "/asylum-docs.html",
+  "/asylum-class.html",
+])
+
+/**
+ * Stylesheets served from `site/`, allow-listed the same way the pages are.
+ *
+ * Separate from `PAGES` because that branch hard-codes `text/html`, and a
+ * stylesheet answered as HTML is not applied by any browser — it fails as a
+ * blank page rather than as an error anyone would think to look for.
+ */
+const STYLES = new Set(["/asylum.css"])
 
 /**
  * The lander's behaviour, in a file rather than a `<script>` block.
@@ -189,6 +205,14 @@ const server = Bun.serve({
       if (await page.exists()) {
         return new Response(page, {
           headers: security({ "content-type": "text/html; charset=utf-8", "cache-control": NO_CACHE }),
+        })
+      }
+    }
+    if (STYLES.has(path)) {
+      const sheet = Bun.file(join(SITE, path))
+      if (await sheet.exists()) {
+        return new Response(sheet, {
+          headers: security({ "content-type": "text/css; charset=utf-8", "cache-control": NO_CACHE }),
         })
       }
     }

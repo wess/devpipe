@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Asylum — documentation</title>
+<meta name="description" content="Asylum reference: concepts, configuration, the repository trust model, the CLI, secrets, the MCP gateway, plugins and integrations.">
+<meta name="theme-color" content="#0B0E14">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/plexmono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/asylum.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="rail">
+    <div class="mark">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M8 11l5 5-5 5" stroke="#FFB454" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17 21h7" stroke="#FFB454" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <a href="/">Devpipe</a>
+      <span class="sep">/</span>
+      <span class="here">Asylum</span>
+    </div>
+    <nav class="rail-nav" aria-label="Asylum">
+      <a href="/asylum.html">Overview</a>
+      <a href="/asylum-docs.html" aria-current="page">Docs</a>
+      <a href="/asylum-class.html">Course</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="eyebrow">Reference</p>
+    <h1>Asylum documentation</h1>
+    <p class="lede">
+      Everything the app does and how to drive it. If you are starting from
+      zero, <a href="/asylum-class.html">the course</a> is the better door —
+      this page assumes you know what a fan-out is.
+    </p>
+
+    <h2>Concepts</h2>
+    <p>
+      Three nouns carry the whole model, and every surface is a view onto one of
+      them.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Term</th><th>What it is</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Project</strong></td><td>A git repository you have opened. Carries a base branch, a trust decision, and its own notes.</td></tr>
+          <tr><td><strong>Task</strong></td><td>A prompt against a project. Moves through draft → running → review → merged.</td></tr>
+          <tr><td><strong>Run</strong></td><td>One agent's attempt at a task, in its own worktree on its own branch, with a live terminal and a stored transcript.</td></tr>
+          <tr><td><strong>Fan-out</strong></td><td>Dispatching one task to several agents at once. Each gets a branch, a worktree and a run.</td></tr>
+          <tr><td><strong>Layout</strong></td><td>A named set of agents raced in one pick — <code>duel</code>, <code>triad</code>, <code>swarm</code>, or your own.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Status versus activity</h3>
+    <p>
+      Two independent signals, and confusing them is the most common early
+      mistake. <strong>Status</strong> is the process lifecycle: queued, running,
+      succeeded, failed, cancelled. <strong>Activity</strong> is what the agent
+      is doing right now — working, blocked, done, idle — classified from its
+      output. A run can be <code>running</code> and <code>blocked</code> at the
+      same time, and that combination is the one worth looking for: it means the
+      agent is waiting on you.
+    </p>
+
+    <h2>Configuration</h2>
+    <p>
+      Two files, with deliberately different authority. <code>settings.json</code>
+      is <em>yours</em>; <code>asylum.toml</code> belongs to the repository.
+    </p>
+
+    <h3>settings.json</h3>
+    <p>
+      Your preferences: default agents, worktree directory, keybindings, theme,
+      the loopback servers, and the list of plugins you have enabled. Lives in
+      your config directory, is watched for changes, and reloads live. A bad
+      value becomes a friendly diagnostic plus the default — it never aborts the
+      load.
+    </p>
+
+    <h3>asylum.toml</h3>
+    <p>Committed at the repository root, for defaults a project's collaborators should share.</p>
+<pre><code>base_branch = "main"
+default_agents = ["claude-code", "codex"]
+setup = ["bun install"]
+
+[env]
+RUST_BACKTRACE = "1"</code></pre>
+
+    <h2>Repository trust</h2>
+    <p>
+      Two of those fields <em>execute</em>. <code>setup</code> runs in a login
+      shell with your full privileges every time a worktree is created, and
+      <code>[env]</code> is injected into every agent process — where an entry
+      like <code>PATH</code> or <code>NODE_OPTIONS</code> is code execution under
+      another name. The file ships inside the repository, so for any repo you did
+      not write, both are authored by someone else.
+    </p>
+    <div class="note">
+      <p>
+        <strong>Opening a repository is not consent to run it.</strong> Until you
+        trust a project, its <code>setup</code> commands and <code>[env]</code>
+        overrides are withheld. The rest of the file still applies —
+        <code>base_branch</code> and <code>default_agents</code> run nothing.
+      </p>
+      <p>
+        The readiness panel shows the position and offers <strong>Trust</strong>.
+        Confirming restates the exact commands and environment entries you are
+        authorising, because "do you trust this project?" is not a question
+        anyone can answer without seeing them.
+      </p>
+    </div>
+    <p>
+      Trust is per-repository and revocable from the same panel. Revoking applies
+      to the next worktree or run rather than retroactively — nothing can un-run
+      a command that already ran. Withheld commands are recorded in the setup
+      transcript, so a run that skipped them says so instead of failing later
+      with a confusing missing dependency.
+    </p>
+    <p>
+      Checks are gated the same way: they run commands the repository declares
+      for itself, like its own <code>package.json</code> scripts or Cargo entry
+      points. Projects added before trust existed start untrusted — having opened
+      a repository is not evidence that what it executes was reviewed.
+    </p>
+
+    <h2>The CLI</h2>
+    <p>
+      The installed binary is <code>asylum</code>. A local <code>cargo run -p app</code>
+      stays <code>asylumdev</code>, so a development build never collides with an
+      installed release.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>asylum worktree create|list|remove</code></td><td>Manage worktrees directly, without the GUI.</td></tr>
+          <tr><td><code>asylum run &lt;agent&gt; &lt;prompt&gt;</code></td><td>Start a single run from the terminal.</td></tr>
+          <tr><td><code>asylum layout list|show</code></td><td>Inspect the named agent presets available to this project.</td></tr>
+          <tr><td><code>asylum search &lt;query&gt;</code></td><td>Search across worktrees, notes, tasks and run transcripts.</td></tr>
+          <tr><td><code>asylum control &lt;verb&gt;</code></td><td>The agent control surface — <code>status</code>, <code>read</code>, <code>spawn</code>, <code>activity</code>, <code>check</code>, <code>skill</code>.</td></tr>
+          <tr><td><code>asylum wait run &lt;id&gt;</code></td><td>Block until a run reaches a status or activity, or a timeout elapses.</td></tr>
+          <tr><td><code>asylum keep set|rm|list</code></td><td>The encrypted, project-scoped credential store.</td></tr>
+          <tr><td><code>asylum call</code></td><td>Spend a stored credential through the masked proxy, so an agent uses a key it never sees.</td></tr>
+          <tr><td><code>asylum mcp list|serve|stdio</code></td><td>The aggregated MCP gateway.</td></tr>
+          <tr><td><code>asylum plugin install|search|list</code></td><td>Install plugins from GitHub and discover them by topic.</td></tr>
+          <tr><td><code>asylum snapshot|click|fill</code></td><td>Computer-use automation against the desktop.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The agent control surface</h2>
+    <p>
+      A running agent can orchestrate the fleet from inside its own worktree. It
+      learns the API from a skill, and reaches it over a token-authenticated
+      loopback service whose credentials are injected into that run's
+      environment. An agent can spawn a helper run, read a sibling's work, run
+      the project's checks, report its own semantic state, and block until
+      another run reaches a state it cares about.
+    </p>
+    <p class="dim">
+      This is what makes agent-driven sub-fleets possible: one agent plans, then
+      dispatches and waits on the specialists. Lesson 12 of the course works
+      through it end to end.
+    </p>
+
+    <h2>Secrets</h2>
+    <p>
+      <code>asylum keep</code> stores a credential encrypted and scoped to a
+      project. <code>asylum call</code> spends it: the request goes through a
+      local masked proxy that attaches the key upstream, so the agent gets the
+      response without ever holding the secret. Both bind to loopback only and
+      require a token — loopback is not an authentication boundary.
+    </p>
+
+    <h2>The MCP gateway</h2>
+    <p>
+      Rather than configuring every MCP server into every agent, Asylum runs one
+      aggregating gateway. It fronts each configured upstream under its own
+      namespace (<code>&lt;service&gt;__&lt;tool&gt;</code>), so an agent connects
+      once and sees everything it is allowed to see.
+    </p>
+    <p>
+      Credentials are scoped: a gateway token names the caller's project — which
+      decides which servers it can reach — and its run, so every tool call is
+      attributable in the event log. The gateway is loopback-only, token-required,
+      rate-limited, and refuses to start on a non-loopback bind.
+    </p>
+
+    <h2>Plugins</h2>
+    <p>
+      A plugin is a directory with a <code>plugin.toml</code>, contributing
+      commands, a panel, event triggers, and MCP tools that agents can call.
+      There are two runtimes: a <strong>process</strong> runtime that speaks JSON
+      over stdio, and a <strong>WASM</strong> runtime sandboxed with
+      capability-gated host access and bounded fuel.
+    </p>
+    <div class="note">
+      <p>
+        <strong>Everything is disabled until you enable it.</strong> A plugin
+        that is not enabled is inert — its triggers never fire and its commands
+        never run. Enabling a process runtime is fully trusted, so it routes
+        through a confirmation that restates the exact command, its authority,
+        and the commit the code is installed at.
+      </p>
+    </div>
+<pre><code>asylum plugin search           # discover by topic
+asylum plugin install owner/repo
+asylum plugin list</code></pre>
+
+    <h2>Integrations</h2>
+    <p>
+      Browse GitHub pull requests and issues without leaving the window, turn an
+      issue straight into a worktree, and open a pull request from a finished
+      run. Linear issues work the same way with a token configured.
+    </p>
+
+    <h2>The mobile companion</h2>
+    <p>
+      An opt-in HTTP server exposing projects, tasks, runs and notifications,
+      plus an event stream so a phone can follow the fleet without polling. It is
+      off by default and requires a token once enabled. Use it to watch a long
+      fan-out from elsewhere and send a follow-up into a live run.
+    </p>
+
+    <h2>Going deeper</h2>
+    <div class="grid">
+      <a class="card" href="/asylum-class.html">
+        <h3>The course →</h3>
+        <p>Sixteen lessons, beginner to advanced, each one building on the last.</p>
+      </a>
+      <a class="card" href="https://github.com/wess/asylum">
+        <h3>Source and issues →</h3>
+        <p>Rust, Apache-2.0. The architecture notes and the full audit trail live in the repository.</p>
+      </a>
+      <a class="card" href="https://github.com/wess/asylum/releases">
+        <h3>Releases →</h3>
+        <p>Signed and notarized macOS builds, Linux packages, and Windows installers.</p>
+      </a>
+    </div>
+  </main>
+
+  <footer>
+    <span>Devpipe</span>
+    <nav class="foot-nav" aria-label="Site">
+      <a href="/">Home</a>
+      <a href="/asylum.html">Asylum</a>
+      <a href="/asylum-class.html">Course</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html">Acceptable use</a>
+    </nav>
+    <span>Built on Sinclair · wess.io</span>
+  </footer>
+</div>
+
+</body>
+</html>

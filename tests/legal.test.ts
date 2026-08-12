@@ -11,7 +11,20 @@ import { db, truncateAll } from "./setup.ts"
  * price stops matching what the card is charged. These tests are the link.
  */
 
-const PAGES = ["index.html", "terms.html", "privacy.html", "aup.html"]
+/**
+ * The legal drafts. These carry the noindex rule below, because a draft that
+ * says it binds nobody must not be what a search engine quotes back at us.
+ */
+const LEGAL = ["terms.html", "privacy.html", "aup.html"]
+
+/**
+ * Asylum's pages. Product documentation rather than drafts — they are meant to
+ * be found, so they are link-checked but deliberately not held to `noindex`.
+ */
+const ASYLUM = ["asylum.html", "asylum-docs.html", "asylum-class.html"]
+
+/** Every page the link checker knows about. */
+const PAGES = ["index.html", ...LEGAL, ...ASYLUM]
 
 /**
  * Paths the web tier answers with the app shell rather than with a file in
@@ -39,6 +52,9 @@ describe("the pages themselves", () => {
       }
       for (const [, link] of body.matchAll(/href="(\/[^"]*)"/g)) {
         if (link === "/" || link.startsWith("/fonts/") || APP_PATHS.has(link)) continue
+        // Stylesheets are `href` too. They are assets, not pages, and the web
+        // tier serves them from its own allow-list.
+        if (/\.(css|js|svg|png|ico|woff2?)$/.test(link)) continue
         const [page, fragment] = link.slice(1).split("#")
         expect(bodies.has(page), `${name} links to missing page ${link}`).toBe(true)
         if (fragment) expect(ids.get(page)?.has(fragment), `${name} links to missing anchor ${link}`).toBe(true)
@@ -49,15 +65,27 @@ describe("the pages themselves", () => {
   test("the drafts are still marked noindex", async () => {
     // Removing this is a launch step. A draft that says it binds nobody must
     // not be the thing a search engine quotes back at us.
-    for (const name of PAGES.filter(n => n !== "index.html")) {
+    for (const name of LEGAL) {
       expect(await read(name), `${name} is indexable`).toContain('name="robots" content="noindex"')
     }
   })
 
-  test("the lander links to all of them", async () => {
+  test("the lander links to the legal pages and to Asylum", async () => {
+    // Not to every Asylum page: the lander carries the entry point, and the
+    // section navigates itself from there. Orphans are caught below instead.
     const lander = await read("index.html")
-    for (const name of PAGES.filter(n => n !== "index.html")) {
+    for (const name of [...LEGAL, "asylum.html"]) {
       expect(lander, `the lander does not link to ${name}`).toContain(`href="/${name}"`)
+    }
+  })
+
+  test("no Asylum page is an orphan", async () => {
+    // Each one must be reachable from another, or it exists only for whoever
+    // already knows the URL — which is the same as not existing.
+    const bodies = new Map(await Promise.all(PAGES.map(async n => [n, await read(n)] as const)))
+    for (const name of ASYLUM) {
+      const linkers = [...bodies].filter(([from, body]) => from !== name && body.includes(`href="/${name}"`))
+      expect(linkers.length, `nothing links to ${name}`).toBeGreaterThan(0)
     }
   })
 

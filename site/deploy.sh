@@ -43,7 +43,8 @@ echo "==> uploading"
 # lander.js goes with them. It is the lander's behaviour, external rather than
 # inline so that script-src can refuse 'unsafe-inline'; leaving it behind gives
 # a page whose claim form silently does nothing.
-for page in index.html terms.html privacy.html aup.html lander.js; do
+for page in index.html terms.html privacy.html aup.html lander.js \
+            asylum.html asylum-docs.html asylum-class.html asylum.css; do
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/var/www/devpipe/$page"
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/opt/devpipe/site/$page"
 done

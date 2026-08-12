@@ -9,6 +9,7 @@ import { audit } from "../util/audit.ts"
 import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
+import { rotateVaultToken } from "../vault/box.ts"
 import { claimForBox } from "../workspaces/index.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
@@ -92,6 +93,13 @@ export const provision = async (
     shell: string
     synapse: boolean
     agentToken: string
+    /**
+     * The box's vault credential, in the clear — this is the only moment it
+     * exists outside the box, because only its hash is stored. A box that is
+     * woken gets a fresh one rather than the old one back, which makes sleeping
+     * a rotation rather than a way to keep a credential alive indefinitely.
+     */
+    vaultToken: string
     workspace: any | null
   },
 ): Promise<number> => {
@@ -127,6 +135,8 @@ export const provision = async (
       logUrl: `${opts.appUrl}/api/boxes/callback/log`,
       loginsUrl: `${opts.appUrl}/api/boxes/callback/logins`,
       callbackSecret: opts.agentToken,
+      vaultToken: opts.vaultToken,
+      vaultUrl: `${opts.appUrl}/api/box/vault`,
       shell: opts.shell,
       synapse: opts.synapse,
       // Without this the mount block is never written, and the volume attaches
@@ -436,6 +446,11 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
             shell,
             synapse: Boolean(b.synapse),
             agentToken,
+            // Minted against the row rather than generated above, so the hash
+            // is stored against a box that definitely exists — a token whose
+            // box was rolled back would authenticate as nothing anyway, but
+            // this keeps the two from ever disagreeing.
+            vaultToken: await rotateVaultToken(db, boxId),
             workspace,
           })
           await audit(db, me.id, "box.created", hostname)
@@ -512,6 +527,11 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
             // The same token the daemon was built with, so a client holding the
             // old connection details is not silently locked out of its own box.
             agentToken: row.agent_token,
+            // A *fresh* vault credential, unlike the agent token above. Only
+            // its hash was ever stored, so the old one cannot be handed back —
+            // and that is the better behaviour anyway: waking rotates it, so a
+            // token lifted from a sleeping box's disk image is already dead.
+            vaultToken: await rotateVaultToken(db, row.id),
             workspace,
           })
           await audit(db, me.id, "box.woken", row.hostname)
