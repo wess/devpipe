@@ -349,5 +349,108 @@ export const vaultRoutes = (db: Connection) => {
         return json(c, 200, { ok: true })
       }),
     ),
+
+    // Which boxes may read which secrets. Listed as (box, entry) pairs rather
+    // than nested under either, because the question a person actually asks is
+    // "what can this box get at" as often as "who can read this key".
+    get(
+      "/vault/grants",
+      authed(async c => {
+        const me = currentUser(c)
+        const rows = (await db.all(
+          from("vault_grants").where(q => q("user_id").equals(me.id)),
+        )) as any[]
+        const out = []
+        for (const row of rows) {
+          const entry = (await db.one(from("vault_entries").where(q => q("id").equals(row.entry_id)))) as any
+          if (!entry) continue
+          out.push({
+            box_id: row.box_id,
+            scope: entry.scope as Scope,
+            scope_id: entry.scope_id as number,
+            name: entry.name as string,
+            granted_at: row.created_at,
+          })
+        }
+        return json(c, 200, out)
+      }),
+    ),
+
+    post(
+      "/vault/grants",
+      writing(async c => {
+        const me = currentUser(c)
+        const b = c.body as { box_id?: number; scope?: string; scope_id?: number; name?: string }
+        const boxId = Math.round(Number(b.box_id) || 0)
+        if (!(await ownsScope(db, me.id, "box", boxId))) {
+          return json(c, 422, { error: "That box is not available." })
+        }
+        const scope = SCOPES.includes(b.scope as Scope) ? (b.scope as Scope) : null
+        if (!scope) return json(c, 422, { error: "Scope must be global, workspace, or box." })
+        const scopeId = scope === "global" ? 0 : Math.round(Number(b.scope_id) || 0)
+        const name = String(b.name ?? "")
+        if (!validName(name)) return json(c, 422, { error: "Invalid name." })
+
+        const entry = (await db.one(
+          from("vault_entries")
+            .where(q => q("user_id").equals(me.id))
+            .where(q => q("scope").equals(scope))
+            .where(q => q("scope_id").equals(scopeId))
+            .where(q => q("name").equals(name)),
+        )) as any
+        if (!entry) return json(c, 404, { error: "No such entry." })
+        // Granting a *value* would imply it was withheld, which it never was.
+        // Refusing says the model out loud rather than silently doing nothing.
+        if (entry.kind !== "secret") {
+          return json(c, 422, { error: "Values are already readable by your boxes; only secrets are granted." })
+        }
+
+        const existing = (await db.one(
+          from("vault_grants")
+            .where(q => q("box_id").equals(boxId))
+            .where(q => q("entry_id").equals(entry.id)),
+        )) as any
+        if (!existing) {
+          await db.execute(
+            from("vault_grants").insert({ user_id: me.id, box_id: boxId, entry_id: entry.id }),
+          )
+        }
+        await audit(db, me.id, "vault.grant", `${name} @ ${scope}:${scopeId} to box ${boxId}`)
+        return json(c, 200, { ok: true })
+      }),
+    ),
+
+    del(
+      "/vault/grants/:boxId/:scope/:scopeId/:name",
+      authed(async c => {
+        const me = currentUser(c)
+        const boxId = Math.round(Number(c.params.boxId) || 0)
+        const scope = SCOPES.includes(c.params.scope as Scope) ? (c.params.scope as Scope) : null
+        if (!scope) return json(c, 404, { error: "No such grant." })
+        const scopeId = scope === "global" ? 0 : Math.round(Number(c.params.scopeId) || 0)
+        const name = String(c.params.name ?? "")
+        if (!validName(name)) return json(c, 404, { error: "No such grant." })
+
+        const entry = (await db.one(
+          from("vault_entries")
+            .where(q => q("user_id").equals(me.id))
+            .where(q => q("scope").equals(scope))
+            .where(q => q("scope_id").equals(scopeId))
+            .where(q => q("name").equals(name)),
+        )) as any
+        if (!entry) return json(c, 404, { error: "No such grant." })
+        await db.execute(
+          from("vault_grants")
+            .where(q => q("user_id").equals(me.id))
+            .where(q => q("box_id").equals(boxId))
+            .where(q => q("entry_id").equals(entry.id))
+            .del(),
+        )
+        // Takes effect on the next read: nothing can un-read a credential a box
+        // already fetched, and saying otherwise would misrepresent revocation.
+        await audit(db, me.id, "vault.revoke", `${name} @ ${scope}:${scopeId} from box ${boxId}`)
+        return json(c, 200, { ok: true })
+      }),
+    ),
   ]
 }

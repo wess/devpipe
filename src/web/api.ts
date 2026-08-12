@@ -405,3 +405,17 @@ export const revealVaultEntry = (scope: VaultScope, scopeId: number, name: strin
   call<{ name: string; kind: VaultKind; value: string }>("GET", `/vault/${scope}/${scopeId}/${name}`)
 export const deleteVaultEntry = (scope: VaultScope, scopeId: number, name: string) =>
   call("DELETE", `/vault/${scope}/${scopeId}/${name}`)
+
+export type VaultGrant = {
+  box_id: number
+  scope: VaultScope
+  scope_id: number
+  name: string
+  granted_at: string
+}
+
+export const listVaultGrants = () => call<VaultGrant[]>("GET", "/vault/grants")
+export const grantVaultEntry = (input: { box_id: number; scope: VaultScope; scope_id: number; name: string }) =>
+  call<{ ok: true }>("POST", "/vault/grants", input)
+export const revokeVaultEntry = (boxId: number, scope: VaultScope, scopeId: number, name: string) =>
+  call("DELETE", `/vault/grants/${boxId}/${scope}/${scopeId}/${name}`)

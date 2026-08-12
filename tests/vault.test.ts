@@ -256,3 +256,69 @@ describe("a box's own credential", () => {
     expect(fresh[0].id).toBeGreaterThan(0)
   })
 })
+
+describe("granting a box a secret", () => {
+  const grant = async (entryName: string) => {
+    const entry = (await db.one(
+      from("vault_entries")
+        .where(q => q("user_id").equals(mine))
+        .where(q => q("name").equals(entryName)),
+    )) as any
+    await db.execute(from("vault_grants").insert({ user_id: mine, box_id: boxId, entry_id: entry.id }))
+  }
+
+  test("a secret is not readable by a box until it is granted", async () => {
+    await putEntry(db, mine, "global", 0, "APIKEY", "secret", "sk-not-real")
+    const before = await visibleTo(db, mine, boxId, workspaceId)
+    // The name is visible — knowing a credential exists is not the same as
+    // holding it — but nothing has been granted.
+    expect(before).toEqual([{ name: "APIKEY", kind: "secret", scope: "global" }])
+    const grants = (await db.all(from("vault_grants").where(q => q("box_id").equals(boxId)))) as any[]
+    expect(grants).toHaveLength(0)
+  })
+
+  test("a grant is keyed to the entry, not the name", async () => {
+    // So granting a global APIKEY does not silently extend to a box-scoped
+    // APIKEY created later — the quiet privilege creep nobody reviews.
+    await putEntry(db, mine, "global", 0, "APIKEY", "secret", "global-key")
+    await grant("APIKEY")
+
+    await putEntry(db, mine, "box", boxId, "APIKEY", "secret", "box-key")
+    const rows = (await db.all(
+      from("vault_entries")
+        .where(q => q("user_id").equals(mine))
+        .where(q => q("name").equals("APIKEY")),
+    )) as any[]
+    expect(rows).toHaveLength(2)
+
+    const granted = (await db.all(from("vault_grants").where(q => q("box_id").equals(boxId)))) as any[]
+    expect(granted).toHaveLength(1)
+    // The grant still points at the global entry, and the box-scoped one — the
+    // entry that now *shadows* it — is not covered by it.
+    const globalRow = rows.find(r => r.scope === "global")
+    expect(granted[0].entry_id).toBe(globalRow.id)
+  })
+
+  test("deleting the entry takes its grants with it", async () => {
+    await putEntry(db, mine, "global", 0, "GONE", "secret", "x")
+    await grant("GONE")
+    expect((await db.all(from("vault_grants").where(q => q("box_id").equals(boxId)))) as any[]).toHaveLength(1)
+
+    await db.execute(
+      from("vault_entries")
+        .where(q => q("user_id").equals(mine))
+        .where(q => q("name").equals("GONE"))
+        .del(),
+    )
+    // ON DELETE CASCADE: a grant pointing at nothing would be a permission
+    // nobody can see and nobody can revoke.
+    expect((await db.all(from("vault_grants").where(q => q("box_id").equals(boxId)))) as any[]).toHaveLength(0)
+  })
+
+  test("destroying the box takes its grants with it too", async () => {
+    await putEntry(db, mine, "global", 0, "KEY2", "secret", "x")
+    await grant("KEY2")
+    await db.execute(from("boxes").where(q => q("id").equals(boxId)).del())
+    expect((await db.all(from("vault_grants").where(q => q("user_id").equals(mine)))) as any[]).toHaveLength(0)
+  })
+})

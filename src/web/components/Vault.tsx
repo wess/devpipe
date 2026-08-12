@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Loader2, Trash2 } from "lucide-react"
+import { Eye, EyeOff, Loader2, Server, Trash2 } from "lucide-react"
 import type React from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import * as api from "../api.ts"
@@ -38,15 +38,18 @@ export const Vault: React.FC = () => {
   const [boxes, setBoxes] = useState<api.Box[]>([])
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [shown, setShown] = useState<Record<string, string>>({})
+  const [grants, setGrants] = useState<api.VaultGrant[]>([])
+  const [granting, setGranting] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [note, setNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null)
 
   const refresh = useCallback(
     () =>
-      api
-        .listVault()
-        .then(setEntries)
+      Promise.all([
+        api.listVault().then(setEntries),
+        api.listVaultGrants().then(setGrants),
+      ])
         .catch(() => {})
         .finally(() => setLoading(false)),
     [],
@@ -150,6 +153,23 @@ export const Vault: React.FC = () => {
       await refresh()
     } catch (error) {
       setNote({ kind: "bad", text: error instanceof Error ? error.message : "Could not delete that." })
+    }
+  }
+
+  /** Boxes currently allowed to read this entry. */
+  const grantedBoxes = (entry: api.VaultEntry) =>
+    grants.filter(g => g.scope === entry.scope && g.scope_id === entry.scope_id && g.name === entry.name)
+
+  const toggleGrant = async (entry: api.VaultEntry, boxId: number, on: boolean) => {
+    try {
+      if (on) {
+        await api.grantVaultEntry({ box_id: boxId, scope: entry.scope, scope_id: entry.scope_id, name: entry.name })
+      } else {
+        await api.revokeVaultEntry(boxId, entry.scope, entry.scope_id, entry.name)
+      }
+      setGrants(await api.listVaultGrants())
+    } catch (error) {
+      setNote({ kind: "bad", text: error instanceof Error ? error.message : "Could not change that grant." })
     }
   }
 
@@ -273,12 +293,53 @@ export const Vault: React.FC = () => {
                               {value}
                             </div>
                           )}
+                          {entry.kind === "secret" && (
+                            <div className="muted small" style={{ marginTop: ".3rem" }}>
+                              {grantedBoxes(entry).length === 0
+                                ? "No box can read this"
+                                : `Readable by ${grantedBoxes(entry)
+                                    .map(g => boxes.find(b => b.id === g.box_id)?.name ?? `#${g.box_id}`)
+                                    .join(", ")}`}
+                            </div>
+                          )}
+                          {granting === key && (
+                            <div style={{ marginTop: ".4rem" }}>
+                              {boxes.length === 0 ? (
+                                <span className="muted small">You have no boxes yet.</span>
+                              ) : (
+                                boxes.map(box => {
+                                  const on = grantedBoxes(entry).some(g => g.box_id === box.id)
+                                  return (
+                                    <label key={box.id} className="muted small" style={{ display: "block" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={on}
+                                        style={{ width: "auto", marginRight: ".4rem" }}
+                                        onChange={() => void toggleGrant(entry, box.id, !on)}
+                                      />
+                                      {box.name}
+                                    </label>
+                                  )
+                                })
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="muted small">{scopeLabel(entry.scope, entry.scope_id)}</td>
                         <td className="muted small">
                           {entry.last_used_at ? when(entry.last_used_at) : "never"}
                         </td>
                         <td className="right">
+                          {entry.kind === "secret" && (
+                            <button
+                              type="button"
+                              className="ghost small"
+                              onClick={() => setGranting(granting === key ? null : key)}
+                              aria-label={`Choose which boxes may read ${entry.name}`}
+                            >
+                              <Server size={14} />
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="ghost small"
