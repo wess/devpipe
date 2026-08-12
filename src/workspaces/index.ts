@@ -159,7 +159,16 @@ export const workspaceRoutes = (db: Connection) => {
 
         const rows = (await db.execute(
           from("workspaces")
-            .insert({ user_id: me.id, name, region, size_gb: sizeGb, volume_id: volume.id })
+            // The name as well as the id: a box mounts by name, and the
+            // provider's is authoritative rather than the one we asked for.
+            .insert({
+              user_id: me.id,
+              name,
+              region,
+              size_gb: sizeGb,
+              volume_id: volume.id,
+              volume_name: volume.name || volumeName,
+            })
             .returning("id", "name", "region", "size_gb", "created_at"),
         )) as any[]
         await audit(db, me.id, "workspace.created", `${name} ${sizeGb}GB ${region}`)

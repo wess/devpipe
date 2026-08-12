@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test"
 import { from } from "@atlas/db"
 import { router } from "@atlas/server"
 import { authRoutes } from "../src/auth/index.ts"
+import { boxRoutes } from "../src/boxes/index.ts"
 import { CREDENTIAL, setCredential, setSetting, SETTING } from "../src/settings/index.ts"
 import { claimForBox, holderOf, workspaceRoutes } from "../src/workspaces/index.ts"
 import { db, truncateAll } from "./setup.ts"
@@ -255,5 +256,94 @@ describe("listing and deleting", () => {
   test("signed out gets nothing", async () => {
     const res = await call("GET", "/workspaces")
     expect(res.status).toBe(401)
+  })
+})
+
+describe("a box that carries one", () => {
+  /**
+   * The wiring, rather than the pieces.
+   *
+   * Both halves of this worked in isolation and the feature did nothing: the
+   * volume was attached to the droplet, and the droplet was never told, so it
+   * came up with an ordinary ~/work and lost everything in it when the box was
+   * destroyed. Nothing below asserts on a volume being created or attached —
+   * only that the box is told what to mount.
+   */
+  let created: any = null
+
+  const stubProvider = () => {
+    globalThis.fetch = (async (input: any, init: any = {}) => {
+      const url = String(typeof input === "string" ? input : input.url)
+      if (!url.startsWith("https://api.digitalocean.com/")) return realFetch(input, init)
+      const path = url.slice("https://api.digitalocean.com/v2".length)
+      const method = String(init.method ?? "GET")
+      const body = init.body ? JSON.parse(String(init.body)) : null
+      const reply = (data: unknown, status = 200) =>
+        new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } })
+
+      if (path === "/volumes" && method === "POST") {
+        return reply(
+          { volume: { id: "vol-1", name: body.name, region: { slug: body.region }, size_gigabytes: body.size_gigabytes, droplet_ids: [] } },
+          201,
+        )
+      }
+      if (path === "/droplets" && method === "POST") {
+        created = body
+        return reply({ droplet: { id: 4242, networks: { v4: [] } } }, 202)
+      }
+      if (path.startsWith("/volumes/") && path.endsWith("/actions") && method === "POST") {
+        return reply({ action: { id: 7, status: "completed" } }, 201)
+      }
+      if (path.includes("/actions/")) return reply({ action: { id: 7, status: "completed" } })
+      if (path.startsWith("/droplets/4242")) {
+        return reply({ droplet: { id: 4242, status: "active", networks: { v4: [] } } })
+      }
+      return reply({}, 200)
+    }) as any
+  }
+
+  test("the box is told which volume to mount", async () => {
+    const ws = await call("POST", "/workspaces", { name: "main", region: "nyc3", size_gb: 10 }, me.token)
+    created = null
+    stubProvider()
+
+    const boxes = router(...boxRoutes(db, "http://test")) as any
+    const res = await boxes(
+      new Request("http://test/boxes", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${me.token}` },
+        body: JSON.stringify({
+          name: "carrier",
+          region: "nyc3",
+          size: "s-1vcpu-1gb",
+          tools: ["git"],
+          workspace_id: ws.data.id,
+        }),
+      }),
+    )
+    expect(res.status).toBe(201)
+    expect(created).not.toBeNull()
+
+    const script = String(created.user_data)
+    expect(script).toContain("Mounting your workspace")
+    // The provider's volume name, which is what the device path is built from.
+    expect(script).toContain("/dev/disk/by-id/scsi-0DO_Volume_dp-1-main")
+    stubOcean()
+  })
+
+  test("a box without one is told nothing about mounting", async () => {
+    created = null
+    stubProvider()
+    const boxes = router(...boxRoutes(db, "http://test")) as any
+    const res = await boxes(
+      new Request("http://test/boxes", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${me.token}` },
+        body: JSON.stringify({ name: "plain", region: "nyc3", size: "s-1vcpu-1gb", tools: ["git"] }),
+      }),
+    )
+    expect(res.status).toBe(201)
+    expect(String(created.user_data)).not.toContain("Mounting your workspace")
+    stubOcean()
   })
 })

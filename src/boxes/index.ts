@@ -270,6 +270,11 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               callbackSecret: agentToken,
               shell,
               synapse: Boolean(b.synapse),
+              // Without this the mount block is never written, and the volume
+              // attaches to a box that has no idea it is there: ~/work is
+              // ordinary disk, and every file in it dies with the machine that
+              // was supposed to be the disposable half.
+              volumeName: workspace?.volume_name,
             }),
             // Without a key nobody can get onto a box that wedges during
             // setup — the first real provisioning run hung and there was no
@@ -291,23 +296,25 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           )
           await audit(db, me.id, "box.created", hostname)
 
-          // The workspace, before cloud-init gets far enough to mount it.
+          // The workspace, on its way while cloud-init installs.
           //
-          // Awaited rather than fired off: the box mounts by device path, and a
-          // volume that arrives after that step has run leaves the machine
-          // running on an empty directory — which looks exactly like an empty
-          // workspace, and is how somebody concludes their files are gone.
+          // Started here but not waited for. Attaching takes tens of seconds and
+          // this is the request the wizard is blocked on, so awaiting it holds
+          // the dialog on "Creating…" for the whole attach. Nothing races: the
+          // mount is near the end of cloud-init, behind an apt run, and the
+          // script waits a further minute for the device before giving up.
           if (workspace) {
-            try {
-              await ocean.attachVolume(token, workspace.volume_id, droplet.id)
-            } catch (err) {
+            void ocean.attachVolume(token, workspace.volume_id, droplet.id).catch(async err => {
               console.error("[devpipe] could not attach a workspace:", err)
+              // Said on the box rather than swallowed. A box that quietly has no
+              // workspace looks exactly like a workspace with nothing in it,
+              // which is how somebody concludes their files are gone.
               await db.execute(
                 from("boxes")
                   .where(q => q("id").equals(boxId))
                   .update({ workspace_id: null, status_detail: "the workspace could not be attached" }),
               )
-            }
+            })
           }
 
           // DNS is what makes the certificate possible, so it happens as soon
