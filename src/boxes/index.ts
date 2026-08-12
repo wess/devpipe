@@ -137,6 +137,7 @@ export const provision = async (
       callbackSecret: opts.agentToken,
       vaultToken: opts.vaultToken,
       vaultUrl: `${opts.appUrl}/api/box/vault`,
+      cliUrl: await getSetting(db, SETTING.cliUrl),
       shell: opts.shell,
       synapse: opts.synapse,
       // Without this the mount block is never written, and the volume attaches

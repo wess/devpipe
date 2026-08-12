@@ -8,6 +8,11 @@ description = "Persistent terminal sessions over a websocket, for the Devpipe cl
 
 [dependencies]
 anyhow = "1"
+# The `devpipe` bin's HTTP client. Blocking and small on purpose: it makes one
+# request per invocation, and an async runtime plus a full client stack would
+# be most of the binary. rustls rather than native-tls so the box needs no
+# OpenSSL at runtime.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 futures-util = "0.3"

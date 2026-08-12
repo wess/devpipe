@@ -17,6 +17,8 @@ export const SETTING = {
   defaultSize: "boxes_default_size",
   boxLimitPerUser: "boxes_limit_per_user",
   daemonUrl: "daemon_url",
+  /** The `devpipe` CLI and MCP server a box downloads alongside the daemon. */
+  cliUrl: "cli_url",
   sshKeyIds: "boxes_ssh_key_ids",
   billingMarginPct: "billing_margin_pct",
   /** Gigabytes a box may send in an hour before it is worth a look. */
@@ -96,6 +98,7 @@ const DEFAULTS: Record<string, string> = {
   // is not a thing to start doing because a default said so.
   [SETTING.dormantDays]: "0",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
+  [SETTING.cliUrl]: "https://devpipe.com/dist/devpipe",
   [SETTING.sshKeyIds]: "",
   // A percentage on top of what the provider charges. 100 means the customer
   // pays double cost, which is what covers the control plane, support and the

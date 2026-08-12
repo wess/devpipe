@@ -17,11 +17,11 @@ SCP=(-i "$KEY" -o StrictHostKeyChecking=accept-new)
 echo "==> vt.wasm"
 (cd "$ROOT/core" && cargo build --release --target wasm32-unknown-unknown >/dev/null)
 
-echo "==> devpiped (linux/amd64) — this is what new boxes download"
+echo "==> devpiped + devpipe (linux/amd64) — what new boxes download"
 docker run --rm --platform linux/amd64 \
   -v "$DEV":/work -w "/work/$NAME/daemon" \
   -e CARGO_TARGET_DIR="/work/$NAME/target-linux" \
-  rust:bookworm bash -c "cargo build --release --bin devpiped" >/dev/null
+  rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe" >/dev/null
 
 echo "==> bundling the app"
 cd "$ROOT"
@@ -54,6 +54,8 @@ done
 scp "${SCP[@]}" -q "$SITE"/fonts/*.woff2 "root@$HOST:/var/www/devpipe/fonts/"
 scp "${SCP[@]}" -q "$SITE/Caddyfile" "root@$HOST:/etc/caddy/Caddyfile"
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpiped" "root@$HOST:/var/www/devpipe/dist/devpiped"
+# The vault CLI and MCP server a box installs alongside the daemon.
+scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpipe" "root@$HOST:/var/www/devpipe/dist/devpipe"
 # Replaced, not merged: scp -r leaves files the repo has since deleted, and a
 # stale migration sorts back into the sequence and re-runs work a later one
 # already did.
@@ -72,6 +74,7 @@ install -m 0755 /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-api
 install -m 0755 /usr/local/bin/devpipe-web.new /usr/local/bin/devpipe-web
 rm -f /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-web.new
 chmod 0755 /var/www/devpipe/dist/devpiped
+chmod 0755 /var/www/devpipe/dist/devpipe
 
 id -u devpipe >/dev/null 2>&1 || useradd --system --home /opt/devpipe --shell /usr/sbin/nologin devpipe
 mkdir -p /var/lib/devpipe

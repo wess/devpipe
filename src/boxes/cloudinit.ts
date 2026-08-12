@@ -41,6 +41,8 @@ export const cloudInit = (opts: {
    */
   vaultToken?: string
   vaultUrl?: string
+  /** Where the box fetches the `devpipe` CLI and MCP server. */
+  cliUrl?: string
   /** Login shell for the box's user. Bash when unset. */
   shell?: string
   /** Whether this box carries the account's Synapse memory. */
@@ -274,7 +276,21 @@ set -a
 set +a
 VAULTSHEOF
 chmod 0644 /etc/profile.d/devpipe-vault.sh
-say "[ok] vault credential installed"`
+say "[ok] vault credential installed"
+${
+  opts.cliUrl
+    ? `curl -fsSL "${opts.cliUrl}" -o /usr/local/bin/devpipe
+chmod 0755 /usr/local/bin/devpipe
+# Registered for Claude Code so an agent finds the vault without being told it
+# exists. Written to the box user's config rather than a system path: this is
+# their tool, and the daemon runs as root.
+sudo -u devpipe mkdir -p /home/devpipe/.config/claude
+sudo -u devpipe tee /home/devpipe/.config/claude/mcp.json >/dev/null <<'MCPEOF'
+{ "mcpServers": { "devpipe": { "command": "/usr/local/bin/devpipe", "args": ["mcp"] } } }
+MCPEOF
+say "[ok] devpipe CLI installed ($(stat -c %s /usr/local/bin/devpipe) bytes)"`
+    : ""
+}`
     : ""
 }
 ${installs}
