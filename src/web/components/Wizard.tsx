@@ -71,6 +71,20 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   /** Whether a subscription already covers a box of this size. */
   const covered = (slug: string) => !billing?.configured || billing.can_create.includes(slug)
 
+  /**
+   * Sizes withheld because nothing is being charged yet.
+   *
+   * Said here rather than only on submit: choosing a size, picking tools, and
+   * then being refused three steps later is a worse way to learn it.
+   */
+  const freeCeiling = billing?.configured ? null : (billing?.free_max_size ?? null)
+  const overFreeCeiling = (slug: string) => {
+    if (!freeCeiling) return false
+    const allowed = sizes.findIndex(s => s.slug === freeCeiling)
+    const wanted = sizes.findIndex(s => s.slug === slug)
+    return allowed >= 0 && wanted > allowed
+  }
+
   // Dependencies are resolved here as well as on the server so the memory
   // figure the user is shown matches what will actually be installed.
   const resolved = useMemo(() => {
@@ -221,7 +235,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
             <p className="muted small">Your selection needs about {needed} MB once the OS has taken its share.</p>
             <div className="choice-grid">
               {sizes.map(s => {
-                const tight = s.memoryMb < needed
+                const tight = s.memoryMb < needed || overFreeCeiling(s.slug)
                 const paid = covered(s.slug)
                 const price = billing?.plans.find(p => p.size === s.slug)
                 return (
@@ -236,7 +250,11 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
                   >
                     <strong>{s.label}</strong>
                     <span className="muted small">${price?.monthly ?? s.monthly}/mo</span>
-                    {tight && <span className="muted small">Too small for this selection</span>}
+                    {tight && (
+                      <span className="muted small">
+                        {overFreeCeiling(s.slug) ? "Not available yet" : "Too small for this selection"}
+                      </span>
+                    )}
                     {!tight && !paid && <span className="muted small">Subscribe to this size</span>}
                   </button>
                 )

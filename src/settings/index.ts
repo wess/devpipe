@@ -21,6 +21,15 @@ export const SETTING = {
   billingMarginPct: "billing_margin_pct",
   /** Gigabytes a box may send in an hour before it is worth a look. */
   egressLimitGb: "boxes_egress_limit_gb",
+  /**
+   * Largest size a box may be while nothing is being charged for it.
+   *
+   * An instance with no Stripe key gives boxes away, which is right for a beta
+   * and unbounded by default: every invited person could take the box limit in
+   * the largest size, on the owner's provider account, and nothing in the
+   * product would mention it until the invoice.
+   */
+  freeMaxSize: "boxes_free_max_size",
 } as const
 
 const DEFAULTS: Record<string, string> = {
@@ -32,6 +41,9 @@ const DEFAULTS: Record<string, string> = {
   // Roughly a gigabit link held for an hour. Nothing a developer does by
   // accident, and well under what a seedbox does deliberately.
   [SETTING.egressLimitGb]: "200",
+  // The cheapest size. Deliberately the floor rather than the ceiling: an
+  // instance giving boxes away should have to raise this on purpose.
+  [SETTING.freeMaxSize]: "s-1vcpu-1gb",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.sshKeyIds]: "",
   // A percentage on top of what the provider charges. 100 means the customer

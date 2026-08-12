@@ -5,7 +5,15 @@ import type { AuthUser } from "../auth/guard.ts"
 import { currentUser, requireAuth, requireOwner } from "../auth/guard.ts"
 import { SIZES } from "../boxes/catalog.ts"
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
-import { CREDENTIAL, credentialHint, getCredential, SETTING, setCredential, setSetting } from "../settings/index.ts"
+import {
+  CREDENTIAL,
+  credentialHint,
+  getCredential,
+  getSetting,
+  SETTING,
+  setCredential,
+  setSetting,
+} from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 import { CURRENCY, marginPct, normalizeMargin, planFor, planName, plansFor } from "./plans.ts"
 import * as stripe from "./stripe.ts"
@@ -52,11 +60,30 @@ export const requireSubscriptionForBox = async (
   db: Connection,
   userId: number,
   size: string,
+  owner = false,
 ): Promise<SubscriptionCheck> => {
   // An instance with no Stripe key has no way to sell anything, and gating on
   // a subscription there would mean nobody can ever create a box. Billing
   // enforces itself only once billing exists.
-  if (!(await getCredential(db, CREDENTIAL.stripeSecretKey))) return { ok: true, reason: "" }
+  //
+  // Free is not the same as unlimited, though. Nothing is being charged for
+  // these, so the bill lands on whoever owns the provider account — and every
+  // invited person could otherwise take the box limit in the largest size
+  // without a single screen mentioning it. The owner is exempt: it is their
+  // account, and capping the person paying is the wrong way round.
+  if (!(await getCredential(db, CREDENTIAL.stripeSecretKey))) {
+    if (owner) return { ok: true, reason: "" }
+    const cap = (await getSetting(db, SETTING.freeMaxSize)) || SIZES[0].slug
+    const allowed = SIZES.findIndex(s => s.slug === cap)
+    const wanted = SIZES.findIndex(s => s.slug === size)
+    if (allowed >= 0 && wanted > allowed) {
+      return {
+        ok: false,
+        reason: `While this instance is free, boxes go up to ${sizeLabel(cap)}.`,
+      }
+    }
+    return { ok: true, reason: "" }
+  }
 
   const mine = (await db.all(
     from("subscriptions")
@@ -305,6 +332,10 @@ export const billingRoutes = (db: Connection, appUrl: string) => {
 
         return json(c, 200, {
           configured: Boolean(key),
+          // What a guest may take while nothing is charged, so the wizard can
+          // grey the rest out instead of letting somebody choose a size and be
+          // refused after three steps of picking tools.
+          free_max_size: key ? null : (await getSetting(db, SETTING.freeMaxSize)) || SIZES[0].slug,
           margin_pct: margin,
           currency: CURRENCY,
           plans: plansFor(margin).map(p => ({

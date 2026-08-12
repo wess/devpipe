@@ -234,6 +234,8 @@ export type BillingStatus = {
   subscriptions: Subscription[]
   /** Size slugs this user can create a box at right now. */
   can_create: string[]
+  /** While nothing is charged, the largest size a guest may take. Null once billing exists. */
+  free_max_size?: string | null
 }
 
 export const billingStatus = () => call<BillingStatus>("GET", "/billing/status")

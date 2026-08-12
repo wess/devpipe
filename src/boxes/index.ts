@@ -180,7 +180,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // that rather than being told about memory first. 402 rather than 403:
         // it is payment that is missing, and the client needs to tell those
         // apart to know whether to offer a checkout link.
-        const gate = await requireSubscriptionForBox(db, me.id, size)
+        const gate = await requireSubscriptionForBox(db, me.id, size, Boolean(me.is_owner))
         if (!gate.ok) return json(c, 402, { error: gate.reason })
 
         // Refuse a build that would be killed by the OOM killer later. The

@@ -570,3 +570,38 @@ describe("checkout and the portal", () => {
     expect(badHook.status).toBe(422)
   })
 })
+
+describe("what a free instance gives away", () => {
+  // These are about the path taken when nothing can be sold, so the key the
+  // earlier tests configured has to come back off — with it set, every check
+  // below asks about subscriptions instead.
+  beforeAll(async () => {
+    await setCredential(db, CREDENTIAL.stripeSecretKey, "")
+  })
+  afterAll(async () => {
+    await setCredential(db, CREDENTIAL.stripeSecretKey, "sk_test_key")
+  })
+
+  test("a guest is capped at the free size", async () => {
+    // No Stripe key means boxes are free, which is right for a beta and
+    // unbounded by default: every invited person could take the box limit in
+    // the largest size, on the owner's provider account, and no screen would
+    // mention it until the invoice.
+    const check = await requireSubscriptionForBox(db, 2, "s-2vcpu-4gb", false)
+    expect(check.ok).toBe(false)
+    expect(check.reason).toContain("1 GB")
+  })
+
+  test("and can still have one at or under it", async () => {
+    for (const size of ["s-1vcpu-512mb-10gb", "s-1vcpu-1gb"]) {
+      const check = await requireSubscriptionForBox(db, 2, size, false)
+      expect(check.ok, `${size} was refused`).toBe(true)
+    }
+  })
+
+  test("the owner is not capped on their own account", async () => {
+    // Capping the person paying the provider bill is the wrong way round.
+    const check = await requireSubscriptionForBox(db, 1, "s-2vcpu-4gb", true)
+    expect(check.ok).toBe(true)
+  })
+})
