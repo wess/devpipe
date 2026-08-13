@@ -209,6 +209,18 @@ for dir in $HOME/.local/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/go/bin $HOME/.
 end
 FISHEOF
 chmod 0644 /etc/fish/conf.d/devpipe-path.fish
+# Zsh has the same problem as fish and was missed: Debian's /etc/zsh/zprofile
+# does not source /etc/profile, so profile.d never runs for a zsh login. A box
+# created with the zsh shell therefore had claude, bun and cargo installed and
+# invisible over SSH — found by making a real box and looking, not by reading.
+#
+# zshenv rather than zprofile: it is read by *every* zsh, login or not, so a
+# non-login 'ssh box command' sees the tools too.
+mkdir -p /etc/zsh
+cat > /etc/zsh/zshenv <<'ZSHEOF'
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/go/bin:$HOME/.opencode/bin:$PATH"
+ZSHEOF
+chmod 0644 /etc/zsh/zshenv
 grep -q devpipe-path /home/devpipe/.bashrc 2>/dev/null || \
   echo '. /etc/profile.d/devpipe-path.sh' >> /home/devpipe/.bashrc
 chown devpipe:devpipe /home/devpipe/.bashrc

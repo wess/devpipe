@@ -403,3 +403,45 @@ describe("the devpipe CLI reaches the box", () => {
     expect(script).not.toContain("mcp.json")
   })
 })
+
+describe("every offered shell can find the installed tools", () => {
+  // Installers drop binaries in ~/.local/bin, ~/.bun/bin and ~/.cargo/bin. Each
+  // shell reads a different file to pick those up, and missing one produces the
+  // worst kind of failure: the tool is installed, runnable, and "not found".
+  //
+  // fish was handled with a comment explaining that it ignores profile.d. zsh
+  // has exactly the same problem and was overlooked — Debian's /etc/zsh/zprofile
+  // does not source /etc/profile — so a zsh box shipped with claude, bun and
+  // cargo invisible over SSH.
+  const script = cloudInit({
+    hostname: "b.example.com",
+    agentToken: "tok",
+    tools: ["bun", "claude-code"],
+    daemonUrl: "https://example.com/devpiped",
+    callbackUrl: "https://example.com/cb",
+    logUrl: "https://example.com/cb/log",
+    loginsUrl: "https://example.com/cb/logins",
+    callbackSecret: "secret",
+  })
+
+  test("bash reads it from profile.d", () => {
+    expect(script).toContain("/etc/profile.d/devpipe-path.sh")
+  })
+
+  test("fish reads it from conf.d", () => {
+    expect(script).toContain("/etc/fish/conf.d/devpipe-path.fish")
+  })
+
+  test("zsh reads it from zshenv", () => {
+    // zshenv rather than zprofile, so a non-login 'ssh box command' sees them too.
+    expect(script).toContain("/etc/zsh/zshenv")
+  })
+
+  test("all three carry the same directories", () => {
+    for (const dir of [".local/bin", ".bun/bin", ".cargo/bin"]) {
+      // Once per shell: bash, fish, zsh.
+      const hits = script.split(dir).length - 1
+      expect(hits).toBeGreaterThanOrEqual(3)
+    }
+  })
+})
