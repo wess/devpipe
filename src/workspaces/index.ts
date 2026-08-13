@@ -43,26 +43,47 @@ const publicWorkspace = (row: any, attachedTo?: number | null) => ({
   attached_to: attachedTo ?? null,
 })
 
-/** The live box holding a workspace, or null. This is the lock. */
-export const holderOf = async (db: Connection, workspaceId: number): Promise<any | null> =>
-  (await db.one(
+/**
+ * The live box holding a workspace, or null. This is the lock.
+ *
+ * `exceptBoxId` excludes one box from the answer, which is what waking needs:
+ * a sleeping box still owns its workspace row, so without this it finds
+ * *itself* holding the lock and refuses. That is not hypothetical — it made
+ * every slept box unwakeable, so reclaim would have stranded whatever it
+ * touched.
+ */
+export const holderOf = async (
+  db: Connection,
+  workspaceId: number,
+  exceptBoxId?: number,
+): Promise<any | null> => {
+  const rows = (await db.all(
     from("boxes")
       .where(q => q("workspace_id").equals(workspaceId))
       .where(q => q("destroyed_at").isNull()),
-  )) as any
+  )) as any[]
+  return rows.find(row => row.id !== exceptBoxId) ?? null
+}
 
 /**
  * The workspace a box may use, or a reason it may not.
  *
- * Called on the box-create path, where the three ways this goes wrong are a
- * workspace that is not yours, one already on another box, and one in another
- * region. The third is the one people will hit by accident.
+ * Called when creating a box and again when waking one, and the difference
+ * between those matters: creating has no box yet, so any holder is somebody
+ * else, while a *sleeping* box still owns its workspace row and would otherwise
+ * be refused for holding its own lock. `exceptBoxId` is how waking says "anyone
+ * but me".
+ *
+ * The three ways this goes wrong are a workspace that is not yours, one already
+ * on another box, and one in another region. The third is the one people will
+ * hit by accident.
  */
 export const claimForBox = async (
   db: Connection,
   userId: number,
   workspaceId: number,
   region: string,
+  exceptBoxId?: number,
 ): Promise<{ ok: true; workspace: any } | { ok: false; reason: string }> => {
   const workspace = (await db.one(
     from("workspaces")
@@ -72,7 +93,7 @@ export const claimForBox = async (
   )) as any
   if (!workspace) return { ok: false, reason: "No such workspace." }
 
-  const holder = await holderOf(db, workspaceId)
+  const holder = await holderOf(db, workspaceId, exceptBoxId)
   if (holder) {
     return {
       ok: false,

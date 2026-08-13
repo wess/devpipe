@@ -535,9 +535,14 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // nothing, but somebody can have given it to another box while this one
         // slept, and waking into a workspace already mounted elsewhere is the
         // one thing block storage will not do.
+        //
+        // Excluding this box is the whole point: a sleeping box keeps its
+        // `workspace_id`, so without it the check finds itself holding the lock
+        // and refuses — "That workspace is on sleeper", where `sleeper` is the
+        // box asking. Every slept box was unwakeable.
         let workspace: any = null
         if (row.workspace_id) {
-          const claim = await claimForBox(db, me.id, row.workspace_id, row.region)
+          const claim = await claimForBox(db, me.id, row.workspace_id, row.region, row.id)
           if (!claim.ok) return json(c, 409, { error: claim.reason })
           workspace = claim.workspace
         }

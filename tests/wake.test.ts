@@ -4,6 +4,7 @@ import { router } from "@atlas/server"
 import { authRoutes } from "../src/auth/index.ts"
 import { boxRoutes } from "../src/boxes/index.ts"
 import { ASLEEP } from "../src/boxes/reclaim.ts"
+import { holderOf } from "../src/workspaces/index.ts"
 import { setSetting, SETTING } from "../src/settings/index.ts"
 import { db, truncateAll } from "./setup.ts"
 
@@ -115,5 +116,55 @@ describe("waking a box", () => {
   test("signing in is required", async () => {
     const id = await boxRow()
     expect((await call("POST", `/boxes/${id}/wake`)).status).toBe(401)
+  })
+})
+
+describe("a sleeping box does not hold its own workspace against itself", () => {
+  // The bug that made reclaim actively destructive: a slept box keeps its
+  // `workspace_id`, so the wake path's "is this workspace free?" check found
+  // *itself* and refused with "That workspace is on sleeper" — where `sleeper`
+  // was the box asking. Every box reclaim put to sleep could never wake.
+  const workspace = async () => {
+    const rows = (await db.execute(
+      from("workspaces")
+        .insert({
+          user_id: userId,
+          name: "work",
+          region: "nyc3",
+          size_gb: 1,
+          volume_id: "vol-1",
+          volume_name: "dp-1-work",
+        })
+        .returning("id"),
+    )) as any[]
+    return rows[0].id as number
+  }
+
+  test("the box itself is not counted as the holder", async () => {
+    const ws = await workspace()
+    const id = await boxRow({ workspace_id: ws })
+    expect(await holderOf(db, ws)).not.toBeNull()
+    // ...but not when it is the one asking.
+    expect(await holderOf(db, ws, id)).toBeNull()
+  })
+
+  test("another box still is", async () => {
+    const ws = await workspace()
+    const mine = await boxRow({ workspace_id: ws })
+    const theirs = await boxRow({ workspace_id: ws, hostname: "other.devpipe.com", name: "other" })
+    // Excluding myself must not excuse a genuine second holder — that is the
+    // case block storage will not survive.
+    const holder = await holderOf(db, ws, mine)
+    expect(holder?.id).toBe(theirs)
+  })
+
+  test("waking past the check reaches the provider, rather than a 409", async () => {
+    const ws = await workspace()
+    const id = await boxRow({ workspace_id: ws })
+    const { status, data } = await call("POST", `/boxes/${id}/wake`, undefined, token)
+    // 503 (no provider configured in this suite) proves it got past the
+    // workspace guard. A 409 would mean it refused itself again.
+    expect(status).toBe(503)
+    expect(data.error).toContain("provider")
   })
 })
