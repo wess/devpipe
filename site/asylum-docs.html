@@ -142,9 +142,12 @@ RUST_BACKTRACE = "1"</code></pre>
         <tbody>
           <tr><td><code>asylum worktree create|list|remove</code></td><td>Manage worktrees directly, without the GUI.</td></tr>
           <tr><td><code>asylum run &lt;agent&gt; &lt;prompt&gt;</code></td><td>Start a single run from the terminal.</td></tr>
+          <tr><td><code>asylum agent add|list|show|remember|forget|rm</code></td><td>Persistent named agents and what each one has learned about this repository.</td></tr>
+          <tr><td><code>asylum schedule add|list|enable|disable|rm</code></td><td>Run a task on a cadence, with nobody watching.</td></tr>
+          <tr><td><code>asylum routine record|run|list|show|rm</code></td><td>Record a workflow in an instrumented shell, then replay it.</td></tr>
           <tr><td><code>asylum layout list|show</code></td><td>Inspect the named agent presets available to this project.</td></tr>
           <tr><td><code>asylum search &lt;query&gt;</code></td><td>Search across worktrees, notes, tasks and run transcripts.</td></tr>
-          <tr><td><code>asylum control &lt;verb&gt;</code></td><td>The agent control surface — <code>status</code>, <code>read</code>, <code>spawn</code>, <code>activity</code>, <code>check</code>, <code>skill</code>.</td></tr>
+          <tr><td><code>asylum control &lt;verb&gt;</code></td><td>The agent control surface — <code>status</code>, <code>read</code>, <code>spawn</code>, <code>activity</code>, <code>check</code>, <code>remember</code>, <code>skill</code>.</td></tr>
           <tr><td><code>asylum wait run &lt;id&gt;</code></td><td>Block until a run reaches a status or activity, or a timeout elapses.</td></tr>
           <tr><td><code>asylum keep set|rm|list</code></td><td>The encrypted, project-scoped credential store.</td></tr>
           <tr><td><code>asylum call</code></td><td>Spend a stored credential through the masked proxy, so an agent uses a key it never sees.</td></tr>
@@ -154,6 +157,58 @@ RUST_BACKTRACE = "1"</code></pre>
         </tbody>
       </table>
     </div>
+
+    <h2>Named agents</h2>
+    <p>
+      A run is a thing that happened. A named agent is somebody who keeps
+      happening: a name, a brief, and a growing list of what it has learned about
+      <em>this</em> repository, put in front of every prompt it gets.
+    </p>
+    <p>
+      The memory is the point. Without it, every fresh run rediscovers that the
+      integration tests need a database up, that the generated files are not the
+      ones to edit, and that one test is flaky — and then the run ends and it is
+      rediscovered again tomorrow. You add to it with
+      <code>asylum agent remember</code>; a <em>running</em> agent adds to it
+      itself with <code>asylum control remember</code>, as it works.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>asylum agent add Reviewer --role '…'</code></td><td>Hire one. <code>--agent</code> picks which CLI drives it. Re-running <code>add</code> updates the brief and <strong>keeps</strong> the memory.</td></tr>
+          <tr><td><code>asylum agent list</code></td><td>The roster, most recently used first, with how much each one knows.</td></tr>
+          <tr><td><code>asylum agent show Reviewer</code></td><td>Its brief and everything it knows — exactly what gets prepended to its prompts.</td></tr>
+          <tr><td><code>asylum agent remember Reviewer '…'</code></td><td>Teach it something yourself. The same line twice is stored once.</td></tr>
+          <tr><td><code>asylum agent forget Reviewer</code></td><td>Wipe the memory, keep the agent — for when it learned something wrong.</td></tr>
+          <tr><td><code>asylum agent rm Reviewer</code></td><td>Remove it. Its past runs stay on the board.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="dim">
+      Named agents are scoped to a project, because a role is about a codebase:
+      "Reviewer" in a Rust workspace and "Reviewer" on a marketing site have
+      nothing useful to say to each other. An agent may write only to its own
+      memory — a sibling on the same task can read your transcript but not plant
+      a line that outlives the task. In the app they appear as chips beside the
+      raw agents, each carrying the number of things it knows.
+    </p>
+
+    <h2>Unattended work</h2>
+    <p>
+      <code>asylum schedule</code> runs a task on a cadence with nobody present.
+      A scheduled run is an ordinary run in every way that matters afterwards:
+      same worktrees, same board, same review, same notifications — the whole
+      point is that you review it the way you review anything else. Missed
+      periods are skipped rather than replayed, so a laptop closed over a
+      weekend wakes to one run instead of every night at once.
+    </p>
+    <p>
+      <code>asylum routine</code> is the other half: show Asylum a workflow once
+      and replay it thereafter. Recording instruments a shell rather than
+      watching the screen, because what is worth replaying in a repository is
+      the commands — and a command does not care where a window moved to.
+    </p>
 
     <h2>The agent control surface</h2>
     <p>
