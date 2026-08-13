@@ -347,6 +347,21 @@ const InstanceSettings: React.FC<{
           "SSH key ids for new boxes",
           "Comma separated, from DigitalOcean. Without one, a box that wedges during setup cannot be inspected.",
         )}
+        {field(
+          "boxes_ssh_sources",
+          "Extra addresses allowed to SSH a box",
+          "Comma separated CIDR. This host is always allowed; add a home or office address to reach a wedged box without hopping through it first. Empty is normal.",
+        )}
+        {field(
+          "boxes_egress_limit_gb",
+          "Egress worth a look, per hour",
+          "Gigabytes out in an hour. Catches a burst — a seedbox, a mirror. 0 turns the check off.",
+        )}
+        {field(
+          "boxes_egress_daily_gb",
+          "Egress worth a look, per day",
+          "Gigabytes out in a day. Catches the patient version the hourly figure is blind to. 0 turns the check off.",
+        )}
       </section>
     </>
   )

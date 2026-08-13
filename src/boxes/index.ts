@@ -57,13 +57,27 @@ export const convergeFirewall = async (db: Connection): Promise<boolean> => {
   const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
   if (!token) return false
   try {
-    await ocean.ensureBoxFirewall(token)
+    await ocean.ensureBoxFirewall(token, ocean.BOX_TAG, await sshSources(db))
     return true
   } catch (err) {
     console.error("[devpipe] could not converge the box firewall:", err)
     return false
   }
 }
+
+/**
+ * Extra addresses the operator wants to reach port 22 from.
+ *
+ * Whitespace and empty entries dropped rather than passed through: DigitalOcean
+ * rejects the whole firewall for one malformed address, and a rules update that
+ * fails leaves every box on the previous rules with nothing in the product
+ * saying so.
+ */
+const sshSources = async (db: Connection): Promise<string[]> =>
+  (await getSetting(db, SETTING.sshSources))
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean)
 
 /**
  * Builds the machine for a box row that already exists.
@@ -107,7 +121,7 @@ export const provision = async (
   // to exist by the time a droplet carrying that tag does. Creating the box
   // first would leave it briefly reachable on every port while cloud-init runs
   // as root — which is the window an opportunistic scanner is looking for.
-  await ocean.ensureBoxFirewall(opts.token)
+  await ocean.ensureBoxFirewall(opts.token, ocean.BOX_TAG, await sshSources(db))
 
   // The prebaked image, when there is one. Empty falls through to the
   // provider's base image and a full install on first boot — slower, but a

@@ -13,7 +13,10 @@ import { boxFirewallSpec, BOX_FIREWALL_NAME, ensureBoxFirewall } from "../src/bo
 const realFetch = globalThis.fetch
 const calls: { method: string; path: string; body: any }[] = []
 
-const stub = (firewalls: any[]) => {
+/** The control plane: tagged `devpipe`, and deliberately not `devpipe-box`. */
+const CONTROL_PLANE = [{ id: 1, tags: ["devpipe"], networks: { v4: [{ type: "public", ip_address: "203.0.113.9" }] } }]
+
+const stub = (firewalls: any[], droplets: any[] | null = CONTROL_PLANE) => {
   globalThis.fetch = (async (input: any, init: any = {}) => {
     const url = String(input)
     const path = url.replace("https://api.digitalocean.com/v2", "")
@@ -22,6 +25,13 @@ const stub = (firewalls: any[]) => {
       path,
       body: init.body ? JSON.parse(init.body) : null,
     })
+    if (path.startsWith("/droplets?")) {
+      if (droplets === null) return new Response("nope", { status: 500 })
+      return new Response(JSON.stringify({ droplets }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
     if (path.startsWith("/firewalls?")) {
       return new Response(JSON.stringify({ firewalls }), {
         status: 200,
@@ -34,6 +44,10 @@ const stub = (firewalls: any[]) => {
     })
   }) as any
 }
+
+/** The sources on the rule that opens a port, from a create or update body. */
+const sourcesFor = (body: any, ports: string): string[] =>
+  body.inbound_rules.find((r: any) => r.ports === ports)?.sources?.addresses ?? []
 
 beforeEach(() => {
   calls.length = 0
@@ -95,6 +109,21 @@ describe("what a box exposes to the internet", () => {
     }
   })
 
+  test("ssh answers the addresses it is given and nobody else", () => {
+    // Nobody on the internet has a key: the authorised keys are the ones in
+    // `boxes_ssh_key_ids`, an instance-wide setting, so port 22 open to
+    // everyone was a port every scanner could knock on and one person could
+    // use. It is also `ssh -D`, which is the zero-effort way to make a box a
+    // SOCKS proxy — no install, no root, works from any laptop.
+    const restricted = boxFirewallSpec("devpipe-box", ["203.0.113.9/32"])
+    expect(sourcesFor(restricted, "22")).toEqual(["203.0.113.9/32"])
+    // Not the other two. Let's Encrypt validates from addresses nobody can
+    // enumerate, and 443 is the product.
+    for (const port of ["80", "443"]) {
+      expect(sourcesFor(restricted, port)).toEqual(["0.0.0.0/0", "::/0"])
+    }
+  })
+
   test("it is attached by tag, so it covers boxes nobody remembered", () => {
     expect(spec.tags).toEqual(["devpipe-box"])
   })
@@ -136,6 +165,54 @@ describe("keeping the firewall the way it should be", () => {
     stub([{ id: "fw-other", name: "someone-elses", inbound_rules: [] }])
     await ensureBoxFirewall("token")
     expect(calls.find(c => c.path === "/firewalls/fw-other")).toBeUndefined()
+    globalThis.fetch = realFetch
+  })
+})
+
+describe("who may reach port 22", () => {
+  test("the control plane, without anybody configuring it", async () => {
+    // Derived rather than written down, because a hardcoded address is right
+    // until the host is rebuilt and then wrong silently: the firewall would go
+    // on converging, and it would be found out the next time a box wedged.
+    stub([])
+    await ensureBoxFirewall("token")
+    expect(sourcesFor(calls.find(c => c.method === "POST")!.body, "22")).toEqual(["203.0.113.9/32"])
+    globalThis.fetch = realFetch
+  })
+
+  test("and the operator's own address, when they add one", async () => {
+    // Both, not one or the other. Listing a home address should not quietly
+    // shut the door on the host that is always reachable.
+    stub([])
+    await ensureBoxFirewall("token", "devpipe-box", ["198.51.100.4/32"])
+    expect(sourcesFor(calls.find(c => c.method === "POST")!.body, "22").sort()).toEqual([
+      "198.51.100.4/32",
+      "203.0.113.9/32",
+    ])
+    globalThis.fetch = realFetch
+  })
+
+  test("never a box, whatever else is on the account", async () => {
+    // A box is `devpipe-box` as well as `devpipe`. Letting one box SSH another
+    // is the whole fleet reachable from any single compromised machine.
+    stub([], [
+      ...CONTROL_PLANE,
+      { id: 2, tags: ["devpipe", "devpipe-box"], networks: { v4: [{ type: "public", ip_address: "198.51.100.77" }] } },
+    ])
+    await ensureBoxFirewall("token")
+    expect(sourcesFor(calls.find(c => c.method === "POST")!.body, "22")).toEqual(["203.0.113.9/32"])
+    globalThis.fetch = realFetch
+  })
+
+  test("everyone, rather than nobody, when the address cannot be resolved", async () => {
+    // An empty source list is not a stricter firewall, it is a locked room with
+    // the key inside: no way onto a box that wedged during setup and no way to
+    // fix it but the provider console. Falling back to today's behaviour is
+    // worse than the restriction and far better than locking ourselves out of
+    // every box at once.
+    stub([], null)
+    await ensureBoxFirewall("token")
+    expect(sourcesFor(calls.find(c => c.method === "POST")!.body, "22")).toEqual(["0.0.0.0/0", "::/0"])
     globalThis.fetch = realFetch
   })
 })

@@ -20,9 +20,30 @@ export const SETTING = {
   /** The `devpipe` CLI and MCP server a box downloads alongside the daemon. */
   cliUrl: "cli_url",
   sshKeyIds: "boxes_ssh_key_ids",
+  /**
+   * Addresses allowed to reach port 22 on a box, comma separated, as CIDR.
+   *
+   * The control plane's own address is always allowed and does not need listing.
+   * This is for the second place an operator wants to reach a wedged box from —
+   * a home or office address — and it is worth nothing to a customer, because
+   * the keys on a box are the ones in `boxes_ssh_key_ids` and those are the
+   * instance's, not theirs.
+   *
+   * Empty is the normal state. Getting it wrong locks nobody out permanently:
+   * the control plane is still allowed, and this converges hourly.
+   */
+  sshSources: "boxes_ssh_sources",
   billingMarginPct: "billing_margin_pct",
   /** Gigabytes a box may send in an hour before it is worth a look. */
   egressLimitGb: "boxes_egress_limit_gb",
+  /**
+   * Gigabytes a box may send in a day before it is worth a look.
+   *
+   * The hourly limit catches a burst and is blind to patience. A box relaying
+   * at a fortieth of that rate never trips it and still moves a terabyte a day,
+   * which is the shape of a proxy rather than a seedbox.
+   */
+  egressDailyGb: "boxes_egress_daily_gb",
   /**
    * Largest size a box may be while nothing is being charged for it.
    *
@@ -79,6 +100,12 @@ const DEFAULTS: Record<string, string> = {
   // Roughly a gigabit link held for an hour. Nothing a developer does by
   // accident, and well under what a seedbox does deliberately.
   [SETTING.egressLimitGb]: "200",
+  // Not the hourly figure times 24, which would be 4.8TB and catch nothing.
+  // The worst honest day on a box — a large dataset pulled a few times, a day
+  // of pushing container images — is under 200GB, so this sits a few times
+  // above real work and an order of magnitude below a machine that is relaying
+  // for somebody.
+  [SETTING.egressDailyGb]: "500",
   // The cheapest size. Deliberately the floor rather than the ceiling: an
   // instance giving boxes away should have to raise this on purpose.
   [SETTING.freeMaxSize]: "s-1vcpu-1gb",
@@ -100,6 +127,7 @@ const DEFAULTS: Record<string, string> = {
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.cliUrl]: "https://devpipe.com/dist/devpipe",
   [SETTING.sshKeyIds]: "",
+  [SETTING.sshSources]: "",
   // A percentage on top of what the provider charges. 100 means the customer
   // pays double cost, which is what covers the control plane, support and the
   // boxes nobody remembered to destroy.

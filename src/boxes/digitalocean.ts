@@ -174,13 +174,23 @@ const ANYWHERE = ["0.0.0.0/0", "::/0"]
 
 export const BOX_FIREWALL_NAME = "devpipe-boxes"
 
-export const boxFirewallSpec = (tag: string) => ({
+export const boxFirewallSpec = (tag: string, sshSources: readonly string[] = ANYWHERE) => ({
   name: BOX_FIREWALL_NAME,
   inbound_rules: [
     // Getting onto a box that wedged during setup. Key-only — the images
     // ship with password authentication off — and it is the only way in when
     // the daemon is the thing that is broken.
-    { protocol: "tcp", ports: "22", sources: { addresses: ANYWHERE } },
+    //
+    // Not open to the internet, because nobody out there has a key: the
+    // authorised keys come from `boxes_ssh_key_ids`, an instance-wide setting,
+    // so the only party who can log in is the operator. Open to everyone it was
+    // the worst of both — every scanner on the internet knocking on a port
+    // useful to one person.
+    //
+    // It also removes `ssh -D`, which is the zero-effort way to turn a box into
+    // a SOCKS proxy: no install, no root, works from any laptop. Everything
+    // else about proxying a box takes deliberate effort, and this took none.
+    { protocol: "tcp", ports: "22", sources: { addresses: [...sshSources] } },
     // Let's Encrypt's HTTP-01 challenge. Without it the box never gets a
     // certificate, and without a certificate iOS will not talk to it at all.
     { protocol: "tcp", ports: "80", sources: { addresses: ANYWHERE } },
@@ -234,8 +244,52 @@ export const boxFirewallSpec = (tag: string) => ({
  */
 export const BOX_TAG = "devpipe-box"
 
-export const ensureBoxFirewall = async (token: string, tag = BOX_TAG): Promise<string> => {
-  const spec = boxFirewallSpec(tag)
+/**
+ * The public addresses of everything on this account that is not a box.
+ *
+ * Which in practice is the control plane: it carries the `devpipe` tag and not
+ * `devpipe-box`, the same distinction the firewall already turns on. Derived
+ * rather than configured because the alternative is a hardcoded address that is
+ * right until the host is rebuilt, and wrong silently — the box firewall would
+ * still converge, and the operator would find out the next time a box wedged.
+ *
+ * Only ever used to decide who may reach port 22.
+ */
+export const controlPlaneAddresses = async (token: string): Promise<string[]> => {
+  const body: any = await request(token, "/droplets?tag_name=devpipe&per_page=200")
+  return (body?.droplets ?? [])
+    .map(shape)
+    .filter((d: Droplet) => !d.tags.includes(BOX_TAG) && d.ip)
+    .map((d: Droplet) => `${d.ip}/32`)
+}
+
+/**
+ * @param sshSources Extra addresses allowed to reach port 22, on top of the
+ *   control plane's own. The operator's home or office, when they want to reach
+ *   a wedged box without hopping through the API host first.
+ */
+export const ensureBoxFirewall = async (
+  token: string,
+  tag = BOX_TAG,
+  sshSources: readonly string[] = [],
+): Promise<string> => {
+  // Falls back to leaving 22 open rather than closing it to everybody.
+  //
+  // An empty source list is not a stricter firewall, it is a locked room with
+  // the key inside: no way onto a box that wedged during setup, and no way to
+  // fix it except the provider console. So a detection that fails, or an
+  // account whose control plane lives somewhere else entirely, gets today's
+  // behaviour — which is worse than the restriction and much better than
+  // having locked ourselves out of every box at once.
+  let allowed = [...sshSources]
+  try {
+    allowed = [...new Set([...allowed, ...(await controlPlaneAddresses(token))])]
+  } catch (err) {
+    console.error("[devpipe] could not resolve the control plane's address:", err)
+  }
+  if (allowed.length === 0) allowed = ANYWHERE
+
+  const spec = boxFirewallSpec(tag, allowed)
   const body: any = await request(token, "/firewalls?per_page=200")
   const existing = (body?.firewalls ?? []).find((f: any) => f.name === BOX_FIREWALL_NAME)
   if (existing) {
@@ -287,7 +341,7 @@ export const listSshKeys = async (token: string) => {
 // ---- bandwidth --------------------------------------------------------------
 
 /**
- * Outbound public bandwidth for a droplet, as an average over the window.
+ * Public bandwidth for a droplet in one direction, averaged over the window.
  *
  * The only measurement here that bounds abuse rather than inconveniencing it.
  * The apt pin and the closed mail ports are friction: they raise the cost of
@@ -300,13 +354,18 @@ export const listSshKeys = async (token: string) => {
  * DigitalOcean has no data — a droplet created minutes ago has none, and a
  * missing reading must never read as a quiet box.
  */
-export const outboundMbps = async (token: string, dropletId: string, windowSeconds = 3600): Promise<number | null> => {
+export const bandwidthMbps = async (
+  token: string,
+  dropletId: string,
+  direction: "inbound" | "outbound",
+  windowSeconds = 3600,
+): Promise<number | null> => {
   const end = Math.floor(Date.now() / 1000)
   const start = end - windowSeconds
   const query = new URLSearchParams({
     host_id: dropletId,
     interface: "public",
-    direction: "outbound",
+    direction,
     start: String(start),
     end: String(end),
   })
@@ -316,6 +375,9 @@ export const outboundMbps = async (token: string, dropletId: string, windowSecon
   const total = values.reduce((sum, [, value]) => sum + Number(value), 0)
   return total / values.length
 }
+
+export const outboundMbps = (token: string, dropletId: string, windowSeconds = 3600) =>
+  bandwidthMbps(token, dropletId, "outbound", windowSeconds)
 
 /** Megabits per second to gigabytes over the same window. */
 export const gigabytesOver = (mbps: number, windowSeconds: number): number => (mbps * windowSeconds) / 8 / 1000

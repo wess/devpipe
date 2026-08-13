@@ -72,8 +72,36 @@ anywhere else — but it is long-lived, and the browser gets it from
 
 A DigitalOcean firewall named `devpipe-boxes`, attached by the `devpipe` tag, is
 converged on every provision by `ensureBoxFirewall` in
-`src/boxes/digitalocean.ts`. Inbound: **22, 80, 443 only**. Outbound:
-unrestricted.
+`src/boxes/digitalocean.ts`. Inbound: **80 and 443 from anywhere, 22 from the
+control plane only**. Outbound: unrestricted.
+
+Port 22 is not open to the internet, and closing it costs no customer anything:
+the authorised keys on a box come from `boxes_ssh_key_ids`, an instance-wide
+setting, so the only party who can log in is the operator. Open to everyone it
+was the worst of both — every scanner on the internet knocking on a port useful
+to one person.
+
+It also removes `ssh -D`, which is the zero-effort way to turn a box into a
+SOCKS proxy: no install, no root, works from any laptop. Everything else about
+proxying a box takes deliberate effort; that took none.
+
+The allowed address is derived, not written down — the droplets tagged `devpipe`
+and not `devpipe-box`, which is the control plane. A hardcoded address is right
+until the host is rebuilt and then wrong silently: the firewall would go on
+converging and it would be found out the next time a box wedged.
+`boxes_ssh_sources` adds to that list, for reaching a wedged box from a home or
+office address without hopping through the API host first.
+
+When the address cannot be resolved at all, 22 falls back to open rather than
+closed. An empty source list is not a stricter firewall, it is a locked room
+with the key inside.
+
+When customer SSH does ship — and it should, `scp`, `rsync` and remote editors
+are what make this a machine rather than a web terminal — it wants
+`DisableForwarding yes` in `sshd_config`. That one directive kills `-D`, `-L`,
+`-R`, agent and X11 forwarding while leaving shells and file copies alone. The
+one thing it costs is `ssh -L` previews of a dev server, which should be served
+through the box's own Caddy and hostname anyway.
 
 It is enforced by DigitalOcean rather than by the box, and that is the whole
 point of it. The box's user has `NOPASSWD:ALL` sudo — deliberately, it is their
@@ -104,11 +132,30 @@ arriving at the provider account every customer's box is created under — where
 the remedy is to lock the account and one person's torrenting costs everyone
 their machine. The same reasoning as the mail block, one layer up.
 
-What bounds it is egress volume, which `src/security/egress.ts` now reads
-hourly from the provider's own metrics — no opinion about what ran on the box,
-which matters, because inspecting a customer's terminal is not something this
-product does. A box over `boxes_egress_limit_gb` (200GB/hour by default, about a
-gigabit held for the hour) is written to the audit trail and warned about.
+What bounds it is egress volume, which `src/security/egress.ts` reads hourly from
+the provider's own metrics — no opinion about what ran on the box, which matters,
+because inspecting a customer's terminal is not something this product does.
+Three signals, and a box trips at most one per sweep:
+
+| Reason | Test | Catches |
+| --- | --- | --- |
+| `burst` | out over `boxes_egress_limit_gb` in an hour (200GB) | a seedbox, a mirror, somebody's backup target |
+| `sustained` | out over `boxes_egress_daily_gb` in a day (500GB) | the same thing run patiently |
+| `relay` | ≥100GB moved, and in within a third of out, over a day | a proxy, under both limits |
+
+The hourly figure alone bounds rate and says nothing about patience: 60Mbps is a
+seventh of the hourly line, never trips it, and is 648GB a day. The daily limit
+is deliberately not the hourly one times 24 — that would be 4.8TB and catch
+nothing.
+
+The relay test is the only one that fires on a box under both limits. A proxy
+forwards what it receives, so its two directions are nearly equal, while a box
+doing work is lopsided: builds pull far more than they push, a seedbox pushes far
+more than it pulls. The 100GB floor is what stops every idle machine qualifying —
+50GB each way over a day is perfectly symmetric and perfectly boring. The ratio
+says what the traffic is; the floor says whether there is enough of it to care.
+
+Each is written to the audit trail as `box.egress_<reason>` and warned about.
 
 It deliberately does not suspend. A busy build, a large dataset, a registry push
 and a seedbox look alike for an hour, and locking a paying customer out of their
