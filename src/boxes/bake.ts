@@ -27,12 +27,23 @@ export const bake = async (
 
   log(`building ${name} in ${region} with ${tools.length} tools`)
 
-  // Bigger than a box needs. The bake runs several installers back to back and
-  // is charged by the hour either way, so the cheap size only makes it slower.
+  // **Disk, not speed, decides this.** A snapshot carries the disk size of the
+  // droplet it was taken from, and DigitalOcean refuses to create a droplet
+  // with a smaller disk than its image — so an image baked on a big machine
+  // cannot boot any of the small ones. The first bake used `s-2vcpu-4gb` for
+  // speed, produced an 80 GB image, and made every size a person would actually
+  // choose fail with "Cannot create a droplet with a smaller disk than the
+  // image."
+  //
+  // So bake on the smallest size a box can usefully be. That is 1 GB / 25 GB:
+  // the 512 MB tier exists in the catalog but `fits()` already refuses to put
+  // claude-code on it, so nothing below this is a real target. The bake takes
+  // longer on a smaller machine, and that is the correct trade — it runs once,
+  // and the alternative is an image nothing can use.
   const droplet = await ocean.createDroplet(token, {
     name: `bake-${stamp}`,
     region,
-    size: opts.size ?? "s-2vcpu-4gb",
+    size: opts.size ?? "s-1vcpu-1gb",
     sshKeyIds: opts.sshKeyIds ?? [],
     // The bake script runs as user data, so the machine builds itself and
     // needs no inbound access at all.

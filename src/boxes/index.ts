@@ -120,42 +120,79 @@ export const provision = async (
         .filter(Boolean)
     : []
 
-  const droplet = await ocean.createDroplet(opts.token, {
-    name: opts.hostname,
-    region: opts.region,
-    size: opts.size,
-    ...(boxImage ? { image: boxImage } : {}),
-    userData: cloudInit({
-      preinstalled,
-      hostname: opts.hostname,
-      agentToken: opts.agentToken,
-      tools: opts.tools,
-      daemonUrl: await getSetting(db, SETTING.daemonUrl),
-      callbackUrl: `${opts.appUrl}/api/boxes/callback`,
-      logUrl: `${opts.appUrl}/api/boxes/callback/log`,
-      loginsUrl: `${opts.appUrl}/api/boxes/callback/logins`,
-      callbackSecret: opts.agentToken,
-      vaultToken: opts.vaultToken,
-      vaultUrl: `${opts.appUrl}/api/box/vault`,
-      cliUrl: await getSetting(db, SETTING.cliUrl),
-      shell: opts.shell,
-      synapse: opts.synapse,
-      // Without this the mount block is never written, and the volume attaches
-      // to a box that has no idea it is there: ~/work is ordinary disk, and
-      // every file in it dies with the machine that was the disposable half.
-      volumeName: opts.workspace?.volume_name,
-    }),
-    // Without a key nobody can get onto a box that wedges during setup — the
-    // first real provisioning run hung and there was no way to look at it.
-    sshKeyIds: (await getSetting(db, SETTING.sshKeyIds))
-      .split(",")
-      .map(s => Number(s.trim()))
-      .filter(n => Number.isFinite(n) && n > 0),
-    // `devpipe` for inventory, `devpipe-box` for the firewall: the control
-    // plane wears the first, so rules hung on it reach a machine that is not
-    // a box.
-    tags: ["devpipe", ocean.BOX_TAG, `user-${opts.userId}`],
-  })
+  // Read once, not per attempt: these do not change between the image try and
+  // the fallback, and awaiting inside the closure would make it async for no
+  // reason.
+  const daemonUrl = await getSetting(db, SETTING.daemonUrl)
+  const cliUrl = await getSetting(db, SETTING.cliUrl)
+  const sshKeyIds = (await getSetting(db, SETTING.sshKeyIds))
+    .split(",")
+    .map(s => Number(s.trim()))
+    .filter(n => Number.isFinite(n) && n > 0)
+
+  /**
+   * One attempt, with or without the prebaked image.
+   *
+   * `preinstalled` has to move with it: the cloud-init that skips installing a
+   * tool is only correct if the image actually carries it, so falling back to
+   * the base image without also restoring the installs would produce a box
+   * missing everything the snapshot was supposed to provide.
+   */
+  const create = (useImage: boolean) =>
+    ocean.createDroplet(opts.token, {
+      name: opts.hostname,
+      region: opts.region,
+      size: opts.size,
+      ...(useImage && boxImage ? { image: boxImage } : {}),
+      userData: cloudInit({
+        preinstalled: useImage ? preinstalled : [],
+        hostname: opts.hostname,
+        agentToken: opts.agentToken,
+        tools: opts.tools,
+        daemonUrl,
+        callbackUrl: `${opts.appUrl}/api/boxes/callback`,
+        logUrl: `${opts.appUrl}/api/boxes/callback/log`,
+        loginsUrl: `${opts.appUrl}/api/boxes/callback/logins`,
+        callbackSecret: opts.agentToken,
+        vaultToken: opts.vaultToken,
+        vaultUrl: `${opts.appUrl}/api/box/vault`,
+        cliUrl,
+        shell: opts.shell,
+        synapse: opts.synapse,
+        // Without this the mount block is never written, and the volume
+        // attaches to a box that has no idea it is there: ~/work is ordinary
+        // disk, and every file in it dies with the machine that was the
+        // disposable half.
+        volumeName: opts.workspace?.volume_name,
+      }),
+      // Without a key nobody can get onto a box that wedges during setup — the
+      // first real provisioning run hung and there was no way to look at it.
+      sshKeyIds,
+      // `devpipe` for inventory, `devpipe-box` for the firewall: the control
+      // plane wears the first, so rules hung on it reach a machine that is not
+      // a box.
+      tags: ["devpipe", ocean.BOX_TAG, `user-${opts.userId}`],
+    })
+
+  /**
+   * Image first, base image second.
+   *
+   * A snapshot carries the disk size of the machine it was baked on, and the
+   * provider refuses a droplet whose disk is smaller than its image — so an
+   * image baked too large fails *every* small size with "Cannot create a
+   * droplet with a smaller disk than the image". That happened on the first
+   * real box. An image that cannot be used should cost somebody a slower boot,
+   * never a box they could not create at all, so the failure falls back to the
+   * base image and installs the tools the long way.
+   */
+  let droplet
+  try {
+    droplet = await create(true)
+  } catch (err) {
+    if (!boxImage) throw err
+    console.error(`[devpipe] the prebaked image would not boot ${opts.size}, building from base:`, err)
+    droplet = await create(false)
+  }
 
   await db.execute(
     from("boxes")
