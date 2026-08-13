@@ -275,6 +275,89 @@ h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: bl
 .resumed.show { opacity: 1; }
 .resumed b { color: var(--good); font-weight: 500; }
 
+/* ---- the brief ------------------------------------------------------ */
+
+/* Four facts, not a feature list. The page's job is still to make somebody
+   want to know more, so each one says a true thing and stops. */
+.brief { padding: clamp(2.25rem, 6vh, 3.5rem) 0 0; }
+
+.brief h2 {
+  font-family: var(--mono);
+  font-size: .74rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-weight: 400;
+  margin: 0 0 clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.facts {
+  display: grid;
+  /* Two columns, not three: four facts in a 2×2 read as a set, where 3+1
+     leaves the last one stranded in a row of its own.
+     `min(24rem, 100%)` rather than a bare 24rem — a track whose minimum
+     exceeds the container overflows it, and `overflow-x: hidden` on body
+     would hide that by clipping the text off a phone instead of reflowing. */
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  gap: clamp(1.1rem, 3vw, 2rem) clamp(1.5rem, 4vw, 3rem);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact { display: flex; gap: .9rem; align-items: baseline; }
+.fact .n {
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--amber);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.fact h3 {
+  font-size: 1.02rem;
+  font-weight: 700;
+  font-stretch: 106%;
+  letter-spacing: -.012em;
+  margin: 0 0 .35rem;
+  color: var(--text);
+}
+.fact p {
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+  color: var(--dim);
+  margin: 0;
+  text-wrap: pretty;
+}
+.fact strong { color: var(--text); font-weight: 400; }
+
+/* The one place the page points somewhere else. It sits after the facts
+   because it is the thing you can have today, not the thing being teased. */
+.aside {
+  margin: clamp(1.75rem, 4vh, 2.5rem) 0 0;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  border-radius: 0 7px 7px 0;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+  color: var(--dim);
+  max-width: 44rem;
+}
+.aside a { color: var(--amber); text-decoration: none; border-bottom: 1px solid rgba(255,180,84,.3); }
+.aside a:hover { border-bottom-color: var(--amber); }
+.aside b { color: var(--text); font-weight: 500; }
+
+.tease {
+  font-family: var(--mono);
+  font-size: .82rem;
+  color: var(--dim);
+  margin: clamp(1.5rem, 3.5vh, 2rem) 0 0;
+  max-width: 44rem;
+}
+
 /* ---- signup --------------------------------------------------------- */
 
 .signup { padding: clamp(2.5rem, 6vh, 4rem) 0 clamp(1.5rem, 4vh, 2.5rem); }
@@ -455,6 +538,65 @@ footer {
 
         <p class="resumed" id="resumed"></p>
       </div>
+    </section>
+
+    <section class="brief">
+      <h2>The shape of it</h2>
+      <ul class="facts">
+        <li class="fact">
+          <span class="n">01</span>
+          <div>
+            <h3>A machine, not a container</h3>
+            <p>
+              Yours, with a name and a disk that stays written to. About three
+              minutes from claim to shell, toolchain already on it.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">02</span>
+          <div>
+            <h3>The work outlives the connection</h3>
+            <p>
+              Agents run on the box, so closing the lid closes
+              <strong>nothing</strong>. What was running is still running.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">03</span>
+          <div>
+            <h3>It stands down when you do</h3>
+            <p>
+              An idle box sleeps and wakes with your files exactly where you
+              left them. You do not pay for a machine to sit warm overnight.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">04</span>
+          <div>
+            <h3>Keys stay out of your dotfiles</h3>
+            <p>
+              Secrets are sealed on the server and granted to a box — global,
+              per workspace, or per machine. Revoke one and the box loses it on
+              the next read.
+            </p>
+          </div>
+        </li>
+      </ul>
+
+      <p class="aside">
+        The desktop side already exists and is free: <b>Asylum</b> races several
+        coding agents at the same task, each in its own worktree, and lets you
+        merge whichever one won. <a href="/asylum.html">Take it now</a> — Devpipe
+        is what it reaches for when your laptop is not enough.
+      </p>
+
+      <p class="tease">
+        There is more here than a box with a shell on it. That part is easier to
+        show than to describe, and it is close.
+      </p>
     </section>
 
     <section class="signup">
