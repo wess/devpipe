@@ -288,6 +288,28 @@ set -a
 set +a
 VAULTSHEOF
 chmod 0644 /etc/profile.d/devpipe-vault.sh
+# The same three-shell problem as the tool PATH: profile.d reaches bash and
+# nothing else, and a box whose shell is zsh or fish had DEVPIPE_VAULT_URL unset
+# — so \`devpipe value get\` failed with "this box has no vault credential"
+# while the credential sat readable on disk.
+mkdir -p /etc/zsh
+cat >> /etc/zsh/zshenv <<'VAULTZSHEOF'
+set -a
+[ -r /etc/devpipe/vault.env ] && . /etc/devpipe/vault.env
+set +a
+VAULTZSHEOF
+mkdir -p /etc/fish/conf.d
+cat > /etc/fish/conf.d/devpipe-vault.fish <<'VAULTFISHEOF'
+if test -r /etc/devpipe/vault.env
+    for line in (cat /etc/devpipe/vault.env)
+        set -l parts (string split -m 1 '=' -- $line)
+        if test (count $parts) -eq 2
+            set -gx $parts[1] $parts[2]
+        end
+    end
+end
+VAULTFISHEOF
+chmod 0644 /etc/fish/conf.d/devpipe-vault.fish
 say "[ok] vault credential installed"
 ${
   opts.cliUrl

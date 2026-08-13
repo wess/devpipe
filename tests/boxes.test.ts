@@ -347,13 +347,20 @@ describe("the box's vault credential reaches the box", () => {
     expect(script).toContain("chmod 0640 /etc/devpipe/vault.env")
   })
 
-  test("is exported to login shells", () => {
+  test("is exported to every shell, not just bash", () => {
+    // profile.d reaches bash and nothing else. A zsh or fish box had
+    // DEVPIPE_VAULT_URL unset, so `devpipe value get` reported "this box has no
+    // vault credential" while the credential sat readable on disk.
     const script = cloudInit({
       ...base,
       vaultToken: "t",
       vaultUrl: "https://example.com/api/box/vault",
     })
     expect(script).toContain("/etc/profile.d/devpipe-vault.sh")
+    expect(script).toContain("/etc/zsh/zshenv")
+    expect(script).toContain("/etc/fish/conf.d/devpipe-vault.fish")
+    // Three shells, three places that read /etc/devpipe/vault.env.
+    expect(script.split("/etc/devpipe/vault.env").length - 1).toBeGreaterThanOrEqual(4)
   })
 
   test("writes nothing at all when no credential is supplied", () => {
