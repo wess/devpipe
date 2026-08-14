@@ -96,12 +96,44 @@ When the address cannot be resolved at all, 22 falls back to open rather than
 closed. An empty source list is not a stricter firewall, it is a locked room
 with the key inside.
 
-When customer SSH does ship — and it should, `scp`, `rsync` and remote editors
-are what make this a machine rather than a web terminal — it wants
-`DisableForwarding yes` in `sshd_config`. That one directive kills `-D`, `-L`,
-`-R`, agent and X11 forwarding while leaving shells and file copies alone. The
-one thing it costs is `ssh -L` previews of a dev server, which should be served
-through the box's own Caddy and hostname anyway.
+### Reaching a box from your own machine
+
+Not over SSH, and that is the intended answer rather than a consolation.
+
+`dpctl` (`daemon/src/bin/dpctl.rs`) signs in to the control plane once, keeps
+the session token in the system keychain, and attaches a local terminal to a box
+over the same authenticated WSS on 443 the web and iOS clients use:
+
+    dpctl login
+    dpctl connect mybox
+
+There is nothing to configure — no key, no `known_hosts`, no flags — because the
+box already has a hostname under `devpipe.com` and a Let's Encrypt certificate
+for it. SSH would be worse here even if port 22 were open: **waking a box builds
+a new droplet**, so its host key changes on every wake and anybody using SSH
+meets `REMOTE HOST IDENTIFICATION HAS CHANGED` every time they come back.
+
+Two properties worth keeping:
+
+- The stored credential is `{server, token}` together, not a bare token. They
+  are one credential — a token minted by a self-hosted instance is worthless at
+  devpipe.com, and sending it there would hand a third party a working session.
+- `dpctl` sets a `User-Agent` of `dpctl/<version> (<hostname>)`, which is what
+  `startSession` records. A laptop therefore appears by name under Settings →
+  Devices and can be signed out from there, so the revocation story is the one
+  that already existed rather than a new one.
+
+A box that is asleep is woken and waited for, and `connect` reattaches to a live
+session of the same shape rather than starting a new shell — the work outliving
+the connection is the product, and an `ssh`-shaped client that opened a fresh
+shell every time would throw it away.
+
+Still to build on this channel: port forwarding (`ssh -L`'s replacement) and
+file transfer. Both ride the same socket and need no new inbound port.
+
+If customer SSH is ever offered anyway, it wants `DisableForwarding yes` in
+`sshd_config` — one directive that kills `-D`, `-L`, `-R`, agent and X11
+forwarding while leaving shells and file copies alone.
 
 It is enforced by DigitalOcean rather than by the box, and that is the whole
 point of it. The box's user has `NOPASSWD:ALL` sudo — deliberately, it is their

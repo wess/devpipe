@@ -17,11 +17,11 @@ SCP=(-i "$KEY" -o StrictHostKeyChecking=accept-new)
 echo "==> vt.wasm"
 (cd "$ROOT/core" && cargo build --release --target wasm32-unknown-unknown >/dev/null)
 
-echo "==> devpiped + devpipe (linux/amd64) — what new boxes download"
+echo "==> devpiped + devpipe (what a box downloads) and dpctl (what a laptop does)"
 docker run --rm --platform linux/amd64 \
   -v "$DEV":/work -w "/work/$NAME/daemon" \
   -e CARGO_TARGET_DIR="/work/$NAME/target-linux" \
-  rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe" >/dev/null
+  rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe --bin dpctl" >/dev/null
 
 echo "==> bundling the app"
 cd "$ROOT"
@@ -56,6 +56,10 @@ scp "${SCP[@]}" -q "$SITE/Caddyfile" "root@$HOST:/etc/caddy/Caddyfile"
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpiped" "root@$HOST:/var/www/devpipe/dist/devpiped"
 # The vault CLI and MCP server a box installs alongside the daemon.
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpipe" "root@$HOST:/var/www/devpipe/dist/devpipe"
+# `dpctl` runs on a laptop, not a box — it is here so `curl https://devpipe.com/dist/dpctl`
+# works on Linux. macOS and Windows builds need a real release job; this is the
+# one platform the box's own toolchain already cross-compiles for.
+scp "${SCP[@]}" -q "$ROOT/target-linux/release/dpctl" "root@$HOST:/var/www/devpipe/dist/dpctl"
 # Replaced, not merged: scp -r leaves files the repo has since deleted, and a
 # stale migration sorts back into the sequence and re-runs work a later one
 # already did.
@@ -75,6 +79,7 @@ install -m 0755 /usr/local/bin/devpipe-web.new /usr/local/bin/devpipe-web
 rm -f /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-web.new
 chmod 0755 /var/www/devpipe/dist/devpiped
 chmod 0755 /var/www/devpipe/dist/devpipe
+chmod 0755 /var/www/devpipe/dist/dpctl
 
 id -u devpipe >/dev/null 2>&1 || useradd --system --home /opt/devpipe --shell /usr/sbin/nologin devpipe
 mkdir -p /var/lib/devpipe

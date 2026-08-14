@@ -170,11 +170,10 @@ struct TokenQuery {
 /// thing every websocket client can do; the header is what the real client
 /// uses.
 fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
-    if let Some(t) = q.token.as_deref() {
-        if t == app.token.as_str() {
+    if let Some(t) = q.token.as_deref()
+        && t == app.token.as_str() {
             return true;
         }
-    }
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -212,7 +211,7 @@ async fn list_sessions(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let mut out: Vec<SessionInfo> =
-        app.sessions.read().unwrap().values().map(|s| info_for(s)).collect();
+        app.sessions.read().unwrap().values().map(info_for).collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Json(out).into_response()
 }
