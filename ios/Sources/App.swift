@@ -170,11 +170,29 @@ final class Workspace: ObservableObject {
     @Published var connection: Control.Connection?
     @Published var error: String?
     @Published var loading = true
+    /// What each tool is called and how it starts. Fetched, never hardcoded.
+    @Published var catalog: [Control.Tool] = []
+    /// The build log of the box being watched, oldest first.
+    @Published var buildLog: [Control.BoxEvent] = []
+    /// A wake or a build in flight, so the button can say so.
+    @Published var busyBox: Int?
+
+    private var logCursor = 0
 
     let control = Control.fromLaunchArgs()
     private var poll: Task<Void, Never>?
 
     var box: Control.Box? { boxes.first { $0.id == selectedBox } }
+
+    /// The agents actually on this box, each with the argv it is started by.
+    ///
+    /// Catalogue order, filtered by what the box was built with — the same
+    /// rule the web client follows, from the same endpoint, so the two cannot
+    /// drift on what a tool is called or how it starts.
+    var agents: [Control.Tool] {
+        guard let box else { return [] }
+        return catalog.filter { $0.group == "agent" && $0.launch != nil && box.tools.contains($0.id) }
+    }
 
     func restore() async {
         guard Control.token != nil else {
@@ -183,6 +201,7 @@ final class Workspace: ObservableObject {
         }
         do {
             user = try await control.me()
+            await loadCatalog()
             await refreshBoxes()
         } catch {
             user = nil
@@ -190,11 +209,55 @@ final class Workspace: ObservableObject {
         loading = false
     }
 
+    /// Once per sign-in. The catalogue changes when the product ships, not
+    /// while somebody is looking at it.
+    func loadCatalog() async {
+        if let out = try? await control.catalog() { catalog = out.tools }
+    }
+
+    /// Build the droplet back, then watch until it answers.
+    func wake() async {
+        guard let box, box.asleep else { return }
+        busyBox = box.id
+        logCursor = 0
+        buildLog = []
+        do {
+            try await control.wake(box: box.id)
+        } catch {
+            self.error = error.localizedDescription
+            busyBox = nil
+            return
+        }
+        await refreshBoxes()
+    }
+
+    /// What the box is printing while it builds itself.
+    ///
+    /// A wake takes about three minutes and a first build rather longer. A
+    /// spinner for that long is indistinguishable from a box that has died,
+    /// which is exactly why the control plane keeps this log — the web client
+    /// has shown it from the start and the iPad showed one static line.
+    func pollBuildLog() async {
+        guard let box, box.building else { return }
+        guard let out = try? await control.events(box: box.id, after: logCursor) else { return }
+        if !out.events.isEmpty {
+            buildLog.append(contentsOf: out.events)
+            logCursor = out.events.last?.id ?? logCursor
+            // Bounded: a long build is thousands of lines and only the tail is
+            // ever on screen.
+            if buildLog.count > 300 { buildLog.removeFirst(buildLog.count - 300) }
+        }
+    }
+
     func refreshBoxes() async {
         do {
             boxes = try await control.boxes()
             if selectedBox == nil {
-                selectedBox = boxes.first(where: { $0.status == "ready" })?.id ?? boxes.first?.id
+                selectedBox = boxes.first(where: { $0.awake })?.id ?? boxes.first?.id
+            }
+            // The wake finished, so the button stops saying it is working.
+            if let busy = busyBox, boxes.first(where: { $0.id == busy })?.awake == true {
+                busyBox = nil
             }
             await openBox()
         } catch {
@@ -208,15 +271,20 @@ final class Workspace: ObservableObject {
         poll?.cancel()
         poll = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                // Faster while something is being built: the log is the
+                // interface then, and eight seconds between lines reads as a
+                // machine that has stopped.
+                let building = await MainActor.run { self?.box?.building ?? false }
+                try? await Task.sleep(nanoseconds: building ? 2_000_000_000 : 8_000_000_000)
                 guard let self else { return }
                 await self.refreshBoxes()
+                await self.pollBuildLog()
             }
         }
     }
 
     func openBox() async {
-        guard let box, box.status == "ready" else {
+        guard let box, box.awake else {
             connection = nil
             sessions = []
             selectedSession = nil
@@ -265,6 +333,8 @@ final class Workspace: ObservableObject {
 struct Gate: View {
     @ObservedObject var workspace: Workspace
     @State private var needsOwner = false
+    @State private var inviteRequired = false
+    @State private var invite = ""
     @State private var registering = false
     @State private var email = ""
     @State private var username = ""
@@ -301,6 +371,12 @@ struct Gate: View {
             if registering || needsOwner {
                 TextField("Username", text: $username).autocapitalization(.none)
                 TextField("Name", text: $name)
+                // Only when the instance says so, and asked for up front
+                // rather than after a whole form has been filled in and
+                // refused. Without this the button could only ever fail.
+                if inviteRequired && !needsOwner {
+                    TextField("Invite code", text: $invite).autocapitalization(.none)
+                }
             }
             SecureField("Password", text: $password).textContentType(.password)
 
@@ -321,7 +397,10 @@ struct Gate: View {
         .frame(maxWidth: 340)
         .padding(24)
         .task {
-            needsOwner = (try? await workspace.control.authState().needs_owner) ?? false
+            if let state = try? await workspace.control.authState() {
+                needsOwner = state.needs_owner
+                inviteRequired = state.invite_required
+            }
         }
     }
 
@@ -332,9 +411,11 @@ struct Gate: View {
             let user =
                 (registering || needsOwner)
                 ? try await workspace.control.register(
-                    email: email, username: username, name: name, password: password)
+                    email: email, username: username, name: name, password: password,
+                    invite: invite)
                 : try await workspace.control.signIn(email: email, password: password)
             workspace.user = user
+            await workspace.loadCatalog()
             await workspace.refreshBoxes()
         } catch {
             self.error = error.localizedDescription
@@ -385,30 +466,82 @@ struct ContentView: View {
         }
     }
 
-    private var empty: some View {
-        VStack(spacing: 10) {
-            Image(systemName: workspace.boxes.isEmpty ? "server.rack" : "terminal")
-                .font(.system(size: 26))
-            Text(
-                workspace.boxes.isEmpty
-                    ? "You do not have a box yet. Set one up on devpipe.com."
-                    : workspace.box?.status == "ready"
-                        ? "Open a terminal to get started."
-                        : workspace.box?.status_detail ?? "Your box is being set up."
-            )
-            .font(.system(size: 13, design: .monospaced))
+    /// What fills the pane when there is no terminal to show.
+    ///
+    /// Four different situations used to collapse into one line of grey text,
+    /// and the one that mattered most — a box asleep, which is where every box
+    /// ends up — offered nothing to do about it.
+    @ViewBuilder private var empty: some View {
+        if let box = workspace.box, box.building {
+            buildingPane(box)
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: workspace.boxes.isEmpty ? "server.rack" : "moon.zzz")
+                    .font(.system(size: 26))
+                if workspace.boxes.isEmpty {
+                    Text("You do not have a box yet. Set one up on devpipe.com.")
+                        .font(.system(size: 13, design: .monospaced))
+                } else if let box = workspace.box, box.asleep {
+                    Text("\(box.name) is asleep. Its work is still on its workspace.")
+                        .font(.system(size: 13, design: .monospaced))
+                    Button(workspace.busyBox == box.id ? "Waking…" : "Wake it") {
+                        Task { await workspace.wake() }
+                    }
+                    .disabled(workspace.busyBox == box.id)
+                    Text("Building the machine back takes about three minutes.")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.gray.opacity(0.7))
+                } else {
+                    Text("Open a terminal to get started.")
+                        .font(.system(size: 13, design: .monospaced))
+                }
+            }
+            .foregroundColor(.gray)
             .multilineTextAlignment(.center)
-            if workspace.box?.status == "ready" {
-                Button("Start Claude Code") {
-                    Task {
-                        await workspace.newTerminal(
-                            ["claude"], cols: controller.term.cols, rows: controller.term.rows)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The build log, because a spinner for three minutes is indistinguishable
+    /// from a box that has died. The control plane has streamed this from the
+    /// start; only this client was not reading it.
+    private func buildingPane(_ box: Control.Box) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(.gray)
+                Text(box.status_detail.isEmpty ? box.status : box.status_detail)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(Color(cgColor: Palette.cursor))
+            }
+            ScrollViewReader { scroller in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(workspace.buildLog) { line in
+                            Text(line.line)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(colorFor(line.line))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(line.id)
+                        }
+                    }
+                }
+                .onChange(of: workspace.buildLog.count) { _, _ in
+                    // Follow the tail: the interesting line is always the last.
+                    if let last = workspace.buildLog.last?.id {
+                        withAnimation { scroller.scrollTo(last, anchor: .bottom) }
                     }
                 }
             }
         }
-        .foregroundColor(.gray)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func colorFor(_ line: String) -> Color {
+        if line.hasPrefix("[!!]") { return .orange }
+        if line.hasPrefix("[ok]") { return .green }
+        if line.hasPrefix("==") { return Color(cgColor: Palette.cursor) }
+        return .gray
     }
 
     private var sidebar: some View {
@@ -421,9 +554,9 @@ struct ContentView: View {
                     Task { await workspace.openBox() }
                 } label: {
                     row(
-                        dot: box.status == "ready" ? Color.green : Color.gray,
+                        dot: box.awake ? Color.green : box.asleep ? Color.gray : Color.orange,
                         title: box.name,
-                        subtitle: box.status == "ready" ? box.hostname : box.status,
+                        subtitle: box.awake ? box.hostname : box.status,
                         selected: workspace.selectedBox == box.id)
                 }
                 .buttonStyle(.plain)
@@ -457,26 +590,39 @@ struct ContentView: View {
 
             Spacer()
 
-            if workspace.box?.status == "ready" {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                if workspace.box?.awake == true {
                     Button("+ shell") {
                         Task {
                             await workspace.newTerminal(
                                 [], cols: controller.term.cols, rows: controller.term.rows)
                         }
                     }
-                    Button("+ claude") {
-                        Task {
-                            await workspace.newTerminal(
-                                ["claude"], cols: controller.term.cols, rows: controller.term.rows)
+                    // From the catalogue, filtered by what this box actually
+                    // has. The old pair of hardcoded buttons offered claude on
+                    // a box built with codex, and started it bare — without
+                    // the flag that lets an agent act without stopping to ask,
+                    // which the web client has always sent.
+                    ForEach(workspace.agents) { tool in
+                        Button("+ \(tool.launch?.first ?? tool.id)") {
+                            Task {
+                                await workspace.newTerminal(
+                                    tool.launch ?? [tool.id],
+                                    cols: controller.term.cols, rows: controller.term.rows)
+                            }
                         }
                     }
-                    Button("sign out") { Task { await workspace.signOut() } }
-                        .foregroundColor(.gray)
+                } else if workspace.box?.asleep == true {
+                    Button(workspace.busyBox == workspace.box?.id ? "waking…" : "wake") {
+                        Task { await workspace.wake() }
+                    }
+                    .disabled(workspace.busyBox == workspace.box?.id)
                 }
-                .font(.system(size: 12, design: .monospaced))
-                .padding(12)
+                Button("sign out") { Task { await workspace.signOut() } }
+                    .foregroundColor(.gray)
             }
+            .font(.system(size: 12, design: .monospaced))
+            .padding(12)
             if let error = workspace.error {
                 Text(error)
                     .font(.system(size: 10, design: .monospaced))

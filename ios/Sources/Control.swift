@@ -41,6 +41,45 @@ struct Control {
         let status_detail: String
         let ip: String
         let tools: [String]
+
+        /// Ready to be worked on right now.
+        var awake: Bool { status == "ready" }
+        /// Its droplet is gone, its workspace is not. `wake` builds it back.
+        var asleep: Bool { status == "asleep" }
+        /// Being made or being woken — either way, something to watch.
+        var building: Bool { !awake && !asleep && status != "pending_destroy" }
+    }
+
+    /// One tool the catalog knows how to install, and how to start it.
+    ///
+    /// `launch` is why this is fetched rather than hardcoded. An agent is
+    /// started in the mode where it acts without stopping to ask, and the flag
+    /// that does it differs per tool — `--dangerously-skip-permissions` for
+    /// claude, `--yolo` for gemini. The app used to send a bare `["claude"]`,
+    /// so an agent on iOS stopped at every prompt while the same agent from
+    /// the web did not. Same product, same box, different behaviour.
+    struct Tool: Codable, Identifiable, Equatable {
+        let id: String
+        let name: String
+        let group: String
+        let launch: [String]?
+    }
+
+    struct Catalog: Codable {
+        let tools: [Tool]
+    }
+
+    /// A line the box printed while building itself.
+    struct BoxEvent: Codable, Identifiable, Equatable {
+        let id: Int
+        let phase: String
+        let line: String
+    }
+
+    struct BoxEvents: Codable {
+        let status: String
+        let detail: String?
+        let events: [BoxEvent]
     }
 
     struct Connection: Codable {
@@ -139,7 +178,17 @@ struct Control {
 
     // MARK: - api
 
-    struct AuthState: Codable { let needs_owner: Bool }
+    struct AuthState: Codable {
+        let needs_owner: Bool
+        /// Whether a code is required to register.
+        ///
+        /// Decoded with a default because an older instance does not send it,
+        /// and a client that fails to parse the gate cannot show the gate.
+        /// Not decoding it at all is what made "Create an account" a button
+        /// that could only ever fail: the server refuses without a code, and
+        /// the app had nowhere to type one.
+        var invite_required: Bool = false
+    }
     struct AuthResult: Codable { let token: String; let user: User }
     struct MeResult: Codable { let user: User }
 
@@ -155,13 +204,14 @@ struct Control {
         return out.user
     }
 
-    func register(email: String, username: String, name: String, password: String) async throws
-        -> User
-    {
-        let out = try await send(
-            "POST", "/api/auth/register",
-            body: ["email": email, "username": username, "name": name, "password": password],
-            as: AuthResult.self)
+    func register(
+        email: String, username: String, name: String, password: String, invite: String
+    ) async throws -> User {
+        var body: [String: Any] = [
+            "email": email, "username": username, "name": name, "password": password,
+        ]
+        if !invite.isEmpty { body["invite"] = invite }
+        let out = try await send("POST", "/api/auth/register", body: body, as: AuthResult.self)
         Control.token = out.token
         return out.user
     }
@@ -177,6 +227,29 @@ struct Control {
 
     func boxes() async throws -> [Box] {
         try await send("GET", "/api/boxes", as: [Box].self)
+    }
+
+    /// Build the droplet back for a box that went to sleep.
+    ///
+    /// Returns as soon as the control plane accepts it, which is a long way
+    /// before the box answers: a wake takes about three minutes. The caller
+    /// polls, which it is doing anyway.
+    func wake(box: Int) async throws {
+        _ = try await send("POST", "/api/boxes/\(box)/wake", as: [String: Bool].self)
+    }
+
+    func destroy(box: Int) async throws {
+        _ = try await send("DELETE", "/api/boxes/\(box)", as: [String: Bool].self)
+    }
+
+    /// What the tools are called and how each one starts.
+    func catalog() async throws -> Catalog {
+        try await send("GET", "/api/boxes/catalog", as: Catalog.self)
+    }
+
+    /// What the box has printed while building itself, after `after`.
+    func events(box: Int, after: Int) async throws -> BoxEvents {
+        try await send("GET", "/api/boxes/\(box)/events?after=\(after)", as: BoxEvents.self)
     }
 
     func connection(box: Int) async throws -> Connection {
