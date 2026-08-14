@@ -146,6 +146,15 @@ The local end binds loopback, never `0.0.0.0` — a forward bound to every
 interface republishes the box's private port to whatever network the laptop is
 on, which is a coffee shop about half the time.
 
+Getting it: `curl -fsSL https://devpipe.com/install.sh | sh`. Served from disk
+by Caddy rather than through the app, so the first thing a new user runs does
+not fail because the API tier is restarting. macOS is one universal binary
+covering both architectures, so an Intel Mac is not a separate instruction;
+Linux x86-64 comes out of the same container as the box binaries. The macOS
+build is ad-hoc signed — enough that Gatekeeper does not refuse a downloaded
+binary outright, **not notarised**, which is a real gap and its own piece of
+work. Windows and Linux ARM are built by `.github/workflows/dpctl.yml`.
+
 Still to build on this channel: file transfer. It rides the same socket and
 needs no new inbound port.
 

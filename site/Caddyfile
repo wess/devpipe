@@ -38,6 +38,16 @@ devpipe.com, www.devpipe.com {
 		header Cache-Control "public, max-age=300"
 	}
 
+	# The one-liner that installs dpctl. Served from disk beside the binaries
+	# it fetches rather than through the app, so `curl … | sh` does not depend
+	# on the API tier being up — the first thing a new user runs should not
+	# fail for a reason that has nothing to do with them.
+	handle /install.sh {
+		file_server
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=300"
+	}
+
 	# Everything else is the app: the API, the web client, and the lander,
 	# which the web tier serves at the root itself.
 	handle {

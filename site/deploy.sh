@@ -23,6 +23,26 @@ docker run --rm --platform linux/amd64 \
   -e CARGO_TARGET_DIR="/work/$NAME/target-linux" \
   rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe --bin dpctl" >/dev/null
 
+echo "==> dpctl for macOS (universal) — what a laptop downloads"
+# Built here rather than in the linux container: a Mac binary needs the Mac
+# SDK, and this is the one platform the machine doing the deploy always has.
+# Both architectures in one file, so `install.sh` has a single asset to pick
+# and an Intel Mac is not a separate instruction to follow.
+if [ "$(uname -s)" = "Darwin" ]; then
+  for t in aarch64-apple-darwin x86_64-apple-darwin; do
+    (cd "$ROOT/daemon" && cargo build --release --target "$t" --bin dpctl) >/dev/null
+  done
+  mkdir -p "$ROOT/build/dist"
+  lipo -create -output "$ROOT/build/dist/dpctl-macos" \
+    "$ROOT/daemon/target/aarch64-apple-darwin/release/dpctl" \
+    "$ROOT/daemon/target/x86_64-apple-darwin/release/dpctl"
+  # Ad-hoc signed so Gatekeeper does not refuse a downloaded binary outright.
+  # Not notarised, which is a real gap and a separate piece of work.
+  codesign --force --sign - --timestamp=none "$ROOT/build/dist/dpctl-macos"
+else
+  echo "    (not on macOS — leaving the existing dpctl-macos in place)"
+fi
+
 echo "==> bundling the app"
 cd "$ROOT"
 bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
@@ -60,6 +80,11 @@ scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpipe" "root@$HOST:/var/www/dev
 # works on Linux. macOS and Windows builds need a real release job; this is the
 # one platform the box's own toolchain already cross-compiles for.
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/dpctl" "root@$HOST:/var/www/devpipe/dist/dpctl"
+if [ -f "$ROOT/build/dist/dpctl-macos" ]; then
+  scp "${SCP[@]}" -q "$ROOT/build/dist/dpctl-macos" "root@$HOST:/var/www/devpipe/dist/dpctl-macos"
+fi
+# The one-liner that fetches whichever of those two fits the machine.
+scp "${SCP[@]}" -q "$SITE/install.sh" "root@$HOST:/var/www/devpipe/install.sh"
 # Replaced, not merged: scp -r leaves files the repo has since deleted, and a
 # stale migration sorts back into the sequence and re-runs work a later one
 # already did.
@@ -80,6 +105,8 @@ rm -f /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-web.new
 chmod 0755 /var/www/devpipe/dist/devpiped
 chmod 0755 /var/www/devpipe/dist/devpipe
 chmod 0755 /var/www/devpipe/dist/dpctl
+chmod 0755 /var/www/devpipe/dist/dpctl-macos 2>/dev/null || true
+chmod 0644 /var/www/devpipe/install.sh
 
 id -u devpipe >/dev/null 2>&1 || useradd --system --home /opt/devpipe --shell /usr/sbin/nologin devpipe
 mkdir -p /var/lib/devpipe
