@@ -36,6 +36,8 @@ dpctl — your Devpipe box, from this machine
   dpctl boxes                     what you have, and whether it is awake
   dpctl connect <box> [--new]     a terminal on that box
   dpctl run <box> -- <command>    one command, then exit
+  dpctl port <box> <port>         reach that port of the box on localhost
+                                  (use 9000:3000 to land on a different one)
 
 A box that is asleep is woken and waited for. Detach from a session with
 Ctrl-] — the session and everything in it keeps running on the box.
@@ -58,6 +60,7 @@ fn main() {
         ["boxes"] => boxes(),
         ["connect", name, rest @ ..] => connect(name, rest),
         ["run", name, rest @ ..] => run(name, rest),
+        ["port", name, spec] => port(name, spec),
         other => {
             eprintln!("dpctl: unknown command `{}`\n", other.join(" "));
             eprint!("{USAGE}");
@@ -100,6 +103,11 @@ impl Account {
             // that silently signs everybody out.
             .unwrap_or(stored);
         Ok(Account { server, token })
+    }
+
+    /// A placeholder for the direct-to-daemon path, which never calls a server.
+    fn direct() -> Account {
+        Account { server: String::new(), token: String::new() }
     }
 
     fn get(&self, path: &str) -> Result<Value, String> {
@@ -314,58 +322,145 @@ fn connect(name: &str, args: &[&str]) -> i32 {
     attach_to(name, Vec::new(), args.contains(&"--new"))
 }
 
-/// Find the box, wake it if it is asleep, get a session, and hand over the
-/// terminal.
-fn attach_to(name: &str, argv: Vec<String>, fresh: bool) -> i32 {
-    let account = match Account::load() {
-        Ok(a) => a,
-        Err(e) => return fail(&e),
-    };
-    let target = match account.find_box(name) {
-        Ok(b) => b,
-        Err(e) => return fail(&e),
-    };
+/// A box that is awake, and how to speak to its daemon.
+struct Reached {
+    account: Account,
+    id: i64,
+    url: String,
+    token: String,
+    /// Set only in direct mode, where there is no control plane to ask.
+    bare: bool,
+}
 
+impl Reached {
+    /// The box's live sessions.
+    ///
+    /// Normally the control plane answers, because it is the thing that knows
+    /// which box belongs to whom. In direct mode it is not running, so the
+    /// daemon's own REST endpoint answers instead — the control plane is a
+    /// proxy for exactly this call, so the two agree by construction.
+    fn sessions(&self) -> Result<Value, String> {
+        if self.bare {
+            return finish(
+                ureq::get(&format!("{}/v1/sessions", self.http())).set(
+                    "authorization",
+                    &format!("Bearer {}", self.token),
+                ),
+                None,
+            );
+        }
+        self.account.get(&format!("/api/boxes/{}/sessions", self.id))
+    }
+
+    fn create_session(&self, argv: &[String], cols: u16, rows: u16) -> Result<Value, String> {
+        let body = json!({ "argv": argv, "cols": cols, "rows": rows });
+        if self.bare {
+            return finish(
+                ureq::post(&format!("{}/v1/sessions", self.http())).set(
+                    "authorization",
+                    &format!("Bearer {}", self.token),
+                ),
+                Some(body),
+            );
+        }
+        self.account.post(&format!("/api/boxes/{}/sessions", self.id), body)
+    }
+
+    /// The same daemon over plain HTTP. `wss` and `ws` are `https` and `http`
+    /// carrying a different upgrade, and the daemon serves both on one port.
+    fn http(&self) -> String {
+        self.url.replacen("wss://", "https://", 1).replacen("ws://", "http://", 1)
+    }
+}
+
+/// Find the box, wake it if it is asleep, and ask where its daemon is.
+///
+/// Waking is the thing SSH could never do. A box asleep is a box whose droplet
+/// does not exist; asking for a shell — or a port — is a perfectly clear
+/// instruction to bring it back, and making somebody open a browser to press a
+/// button first is the friction this tool exists to remove.
+fn reach(name: &str) -> Result<Reached, String> {
+    // Straight at a daemon, skipping the control plane entirely:
+    //
+    //   DEVPIPE_DIRECT=ws://127.0.0.1:7788 DEVPIPE_TOKEN=... dpctl port x 3000
+    //
+    // For working on the daemon itself, where there is no account and no box —
+    // the same reason `probe` exists. Not a way around authentication: the
+    // daemon still demands its own token, this only skips asking a server
+    // which box is which.
+    if let Ok(direct) = std::env::var("DEVPIPE_DIRECT") {
+        let token = std::env::var("DEVPIPE_TOKEN")
+            .map_err(|_| "DEVPIPE_DIRECT needs DEVPIPE_TOKEN as well.".to_string())?;
+        return Ok(Reached { account: Account::direct(), id: 0, url: direct, token, bare: true });
+    }
+    let account = Account::load()?;
+    let target = account.find_box(name)?;
     let id = target.get("id").and_then(Value::as_i64).unwrap_or(0);
     let status = target.get("status").and_then(Value::as_str).unwrap_or("");
 
-    // Waking is the thing SSH could never do. A box asleep is a box whose
-    // droplet does not exist; asking for a shell is a perfectly clear
-    // instruction to bring it back, and making somebody open a browser to
-    // press a button first is the friction this tool exists to remove.
     if status == "asleep" {
         eprintln!("{name} is asleep. Waking it — this takes about three minutes.");
-        if let Err(e) = account.post(&format!("/api/boxes/{id}/wake"), Value::Null) {
-            return fail(&e);
-        }
-        if let Err(e) = wait_until_ready(&account, id) {
-            return fail(&e);
-        }
+        account.post(&format!("/api/boxes/{id}/wake"), Value::Null)?;
+        wait_until_ready(&account, id)?;
     } else if status != "ready" {
-        return fail(&format!(
+        return Err(format!(
             "{name} is {status}, not ready. `dpctl boxes` will show what it is doing."
         ));
     }
 
-    let conn = match account.get(&format!("/api/boxes/{id}/connection")) {
-        Ok(v) => v,
-        Err(e) => return fail(&e),
-    };
+    let conn = account.get(&format!("/api/boxes/{id}/connection"))?;
     let (Some(url), Some(token)) = (
         conn.get("url").and_then(Value::as_str),
         conn.get("token").and_then(Value::as_str),
     ) else {
-        return fail("The server did not say how to reach that box.");
+        return Err("The server did not say how to reach that box.".into());
+    };
+    Ok(Reached { id, url: url.to_string(), token: token.to_string(), account, bare: false })
+}
+
+/// Find the box, get a session, and hand over the terminal.
+fn attach_to(name: &str, argv: Vec<String>, fresh: bool) -> i32 {
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
     };
 
     let (cols, rows) = window_size();
-    let session = match pick_session(&account, id, &argv, fresh, cols, rows) {
+    let session = match pick_session(&reached, &argv, fresh, cols, rows) {
         Ok(s) => s,
         Err(e) => return fail(&e),
     };
 
-    let ws = format!("{url}/v1/sessions/{session}/attach");
-    match pump(&ws, token, cols, rows) {
+    let ws = format!("{}/v1/sessions/{session}/attach", reached.url);
+    match pump(&ws, &reached.token, cols, rows) {
+        Ok(()) => 0,
+        Err(e) => fail(&e),
+    }
+}
+
+/// `ssh -L`, without the ssh.
+///
+/// The spec is `3000` for the same port at both ends, or `9000:3000` when the
+/// one you want locally is taken — which it usually is, because the reason to
+/// run something on a box is often that it clashes with what is already on
+/// your laptop.
+fn port(name: &str, spec: &str) -> i32 {
+    let (local, remote) = match spec.split_once(':') {
+        Some((l, r)) => (l.parse::<u16>().ok(), r.parse::<u16>().ok()),
+        None => (spec.parse::<u16>().ok(), spec.parse::<u16>().ok()),
+    };
+    let (Some(local), Some(remote)) = (local, remote) else {
+        return fail("A port looks like `3000`, or `9000:3000` to land on a different one.");
+    };
+    if remote == 0 {
+        return fail("Port 0 is not a port.");
+    }
+
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
+    };
+    match listen(local, remote, &reached.url, &reached.token, name) {
         Ok(()) => 0,
         Err(e) => fail(&e),
     }
@@ -407,15 +502,14 @@ fn wait_until_ready(account: &Account, id: i64) -> Result<(), String> {
 /// the connection, and a `connect` that started a fresh shell every time would
 /// throw that away exactly as `ssh` does.
 fn pick_session(
-    account: &Account,
-    id: i64,
+    reached: &Reached,
     argv: &[String],
     fresh: bool,
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
     if !fresh {
-        let existing = account.get(&format!("/api/boxes/{id}/sessions"))?;
+        let existing = reached.sessions()?;
         let alive = existing
             .as_array()
             .and_then(|rows| {
@@ -428,8 +522,21 @@ fn pick_session(
                     // Only a session of the same shape. Reattaching a bare
                     // `connect` to somebody's running `claude` would drop the
                     // user into an agent they did not ask for.
-                    let theirs = s.get("argv").and_then(Value::as_array).cloned().unwrap_or_default();
-                    theirs.iter().filter_map(Value::as_str).eq(argv.iter().map(String::as_str))
+                    let theirs: Vec<&str> = s
+                        .get("argv")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    // An empty argv means "the login shell", and the daemon
+                    // resolves that before it reports it — a plain `connect`
+                    // asks for `[]` and is listed back as `["/bin/zsh"]`.
+                    // Comparing the two literally never matched, so every
+                    // `connect` opened a new shell and the persistence this
+                    // command exists for was invisible.
+                    if argv.is_empty() {
+                        return theirs.len() <= 1;
+                    }
+                    theirs == argv.iter().map(String::as_str).collect::<Vec<_>>()
                 })
             })
             .and_then(|s| s.get("id").and_then(Value::as_str).map(str::to_string));
@@ -438,10 +545,7 @@ fn pick_session(
             return Ok(id);
         }
     }
-    let made = account.post(
-        &format!("/api/boxes/{id}/sessions"),
-        json!({ "argv": argv, "cols": cols, "rows": rows }),
-    )?;
+    let made = reached.create_session(argv, cols, rows)?;
     let sid = made
         .get("id")
         .and_then(Value::as_str)
@@ -550,6 +654,7 @@ fn pump(url: &str, token: &str, cols: u16, rows: u16) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         let mut out = std::io::stdout();
         let mut detached = false;
+        let mut stdin_done = false;
 
         loop {
             tokio::select! {
@@ -574,7 +679,7 @@ fn pump(url: &str, token: &str, cols: u16, rows: u16) -> Result<(), String> {
                     Some(Err(e)) => return Err(format!("The connection dropped: {e}")),
                     None => break,
                 },
-                chunk = typed.recv() => match chunk {
+                chunk = typed.recv(), if !stdin_done => match chunk {
                     Some(bytes) => {
                         if let Some(cut) = bytes.iter().position(|b| *b == DETACH) {
                             if cut > 0 {
@@ -587,7 +692,13 @@ fn pump(url: &str, token: &str, cols: u16, rows: u16) -> Result<(), String> {
                             break;
                         }
                     }
-                    None => break,
+                    // Nothing left to type is not a reason to hang up. The
+                    // command is still running and its output is still coming;
+                    // closing here truncates it, which is what
+                    // `dpctl run box -- cmd` looks like in a pipeline and what
+                    // any use of this under `< file` would do. The socket ends
+                    // when the far side says so.
+                    None => stdin_done = true,
                 },
                 _ = winch.recv() => {
                     let (cols, rows) = window_size();
@@ -605,6 +716,115 @@ fn pump(url: &str, token: &str, cols: u16, rows: u16) -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+// ---- forwarding ------------------------------------------------------------
+
+/// Accepts on localhost and gives each connection its own tunnel.
+///
+/// One websocket per TCP connection rather than one multiplexed socket with a
+/// stream id. Multiplexing means inventing a framing layer, a close protocol
+/// and a flow-control story, all of which the websocket already has — and the
+/// thing being forwarded is a dev server, where connection counts are in the
+/// tens rather than the thousands.
+///
+/// Bound to loopback, never `0.0.0.0`. A forward bound to every interface
+/// republishes the box's private port to whatever network the laptop is on,
+/// which is a coffee shop about half the time.
+fn listen(local: u16, remote: u16, url: &str, token: &str, name: &str) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let ws = format!("{url}/v1/forward?port={remote}");
+    runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", local))
+            .await
+            .map_err(|e| format!("Could not listen on localhost:{local}: {e}"))?;
+        eprintln!("localhost:{local} → {name}:{remote}. Ctrl-C to stop.");
+
+        loop {
+            let (socket, _) = listener.accept().await.map_err(|e| e.to_string())?;
+            let ws = ws.clone();
+            let token = token.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = tunnel(socket, &ws, &token).await {
+                    // Per connection, not fatal: a dev server restarting should
+                    // cost the request in flight and nothing else.
+                    eprintln!("dpctl: {e}");
+                }
+            });
+        }
+    })
+}
+
+/// One accepted connection, spliced to the box's port over its own socket.
+async fn tunnel(socket: tokio::net::TcpStream, url: &str, token: &str) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url)
+            .map_err(|e| e.to_string())?;
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {token}").parse().map_err(|_| "bad token".to_string())?,
+    );
+    let (ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| format!("could not open a tunnel: {e}"))?;
+
+    let _ = socket.set_nodelay(true);
+    let (mut read, mut write) = socket.into_split();
+    let (mut tx, mut rx) = ws.split();
+
+    let mut up = tokio::spawn(async move {
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            match read.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(Message::Binary(buf[..n].to_vec())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.close().await;
+    });
+
+    let mut down = tokio::spawn(async move {
+        while let Some(Ok(message)) = rx.next().await {
+            match message {
+                Message::Binary(bytes)
+                    if write.write_all(&bytes).await.is_err() => {
+                        break;
+                    }
+                // The daemon says so in words when nothing is listening on the
+                // box, because a refused connection arriving as a bare close
+                // frame is indistinguishable from the tunnel itself failing.
+                Message::Text(text) => {
+                    if let Some(why) = serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .filter(|v| v.get("t").and_then(Value::as_str) == Some("refused"))
+                        .and_then(|v| v.get("why").and_then(Value::as_str).map(str::to_string))
+                    {
+                        eprintln!("dpctl: nothing is listening on the box: {why}");
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        let _ = write.shutdown().await;
+    });
+
+    tokio::select! {
+        _ = &mut up => down.abort(),
+        _ = &mut down => up.abort(),
+    }
+    Ok(())
 }
 
 // ---- odds and ends ---------------------------------------------------------

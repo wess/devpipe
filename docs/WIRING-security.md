@@ -128,8 +128,26 @@ session of the same shape rather than starting a new shell — the work outlivin
 the connection is the product, and an `ssh`-shaped client that opened a fresh
 shell every time would throw it away.
 
-Still to build on this channel: port forwarding (`ssh -L`'s replacement) and
-file transfer. Both ride the same socket and need no new inbound port.
+`dpctl port mybox 3000` is `ssh -L`'s replacement, over the daemon's
+`/v1/forward`. The destination is **not a parameter** — it is always
+`127.0.0.1` on the box — and that is the whole security model here. An endpoint
+that forwarded to an arbitrary host would be an open proxy for anyone holding a
+box token: not a privilege escalation, since the owner already has a shell, but
+it would make relaying through a box a one-liner rather than something you set
+up on purpose, and that is the distinction `abuse.ts` turns on. A test asserts
+the destination stays unchoosable.
+
+One websocket per TCP connection rather than one multiplexed socket with stream
+ids: multiplexing means inventing framing, a close protocol and flow control,
+all of which the websocket already has, and the thing being forwarded is a dev
+server where connections number in the tens.
+
+The local end binds loopback, never `0.0.0.0` — a forward bound to every
+interface republishes the box's private port to whatever network the laptop is
+on, which is a coffee shop about half the time.
+
+Still to build on this channel: file transfer. It rides the same socket and
+needs no new inbound port.
 
 If customer SSH is ever offered anyway, it wants `DisableForwarding yes` in
 `sshd_config` — one directive that kills `-D`, `-L`, `-R`, agent and X11

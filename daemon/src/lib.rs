@@ -79,6 +79,10 @@ enum ServerMsg {
     /// the bytes that follow are a fresh screen, not a continuation.
     Resync,
     Exit,
+    /// Nothing is listening on that port of the box. Said in words rather than
+    /// left as a close frame, because "connection refused" from a forwarded
+    /// port is otherwise indistinguishable from the tunnel itself failing.
+    Refused { port: u16, why: String },
 }
 
 /// Put the terminal and job-control signals back to their default
@@ -131,6 +135,7 @@ pub fn router(token: String) -> Router {
         .route("/v1/sessions", get(list_sessions).post(create_session))
         .route("/v1/sessions/{id}", delete(kill_session))
         .route("/v1/sessions/{id}/attach", get(attach))
+        .route("/v1/forward", get(forward))
         .with_state(app)
 }
 
@@ -246,6 +251,112 @@ fn info_for(s: &Arc<Session>) -> SessionInfo {
     }
 }
 
+#[derive(Deserialize)]
+struct ForwardQuery {
+    port: u16,
+    token: Option<String>,
+}
+
+/// The port a dev server is on, reachable from your own machine.
+///
+/// This is `ssh -L`'s replacement, and it exists because `ssh -L` is gone:
+/// forwarding is what turns a box into somebody's proxy, so SSH gets
+/// `DisableForwarding yes` and this takes the one case that was ever
+/// legitimate. Riding the daemon's socket also means no second inbound port,
+/// no second credential, and no second thing to get wrong.
+///
+/// **Loopback only, and that is the whole security model here.** The
+/// destination is not a parameter — it is always `127.0.0.1` on the box. An
+/// endpoint that forwarded to an arbitrary host would be an open proxy for
+/// anyone holding the box token: not a privilege escalation, since the owner
+/// already has a shell, but it would make relaying through a box a one-liner
+/// rather than something you have to set up on purpose. `security/abuse.ts`
+/// explains why that distinction is the one that matters — the complaint
+/// lands on the provider account every customer's box is created under.
+async fn forward(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<ForwardQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let auth = TokenQuery { token: q.token.clone() };
+    if !authorized(&app, &headers, &auth) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if q.port == 0 {
+        return (StatusCode::BAD_REQUEST, "port 0 is not a port").into_response();
+    }
+    ws.on_upgrade(move |socket| splice(socket, q.port))
+}
+
+/// One forwarded connection: the websocket at one end, a loopback TCP socket
+/// at the other, until either stops.
+async fn splice(socket: WebSocket, port: u16) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Connected before anything is piped, so a closed port is reported as a
+    // close frame the client can explain rather than a socket that accepts
+    // bytes and silently discards them.
+    let upstream = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(s) => s,
+        Err(e) => {
+            let mut socket = socket;
+            let _ = socket
+                .send(Message::Text(
+                    json(&ServerMsg::Refused { port, why: e.to_string() }).into(),
+                ))
+                .await;
+            return;
+        }
+    };
+    // Nagle off: a forwarded connection is mostly small request and response
+    // frames, and batching them adds a round trip of latency to every one.
+    let _ = upstream.set_nodelay(true);
+
+    let (mut read, mut write) = upstream.into_split();
+    let (mut tx, mut rx) = socket.split();
+
+    let mut down = tokio::spawn(async move {
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            match read.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tx.close().await;
+    });
+
+    let mut up = tokio::spawn(async move {
+        while let Some(Ok(message)) = rx.next().await {
+            match message {
+                Message::Binary(bytes)
+                    if write.write_all(&bytes).await.is_err() => {
+                        break;
+                    }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        // Half-close rather than drop: a client that has finished sending is
+        // often still waiting to be answered, and tearing the socket down here
+        // truncates the response.
+        let _ = write.shutdown().await;
+    });
+
+    // Either direction ending ends the pair. A forwarded connection has no
+    // meaning with one half of it gone.
+    tokio::select! {
+        _ = &mut down => up.abort(),
+        _ = &mut up => down.abort(),
+    }
+}
+
 async fn attach(
     State(app): State<App>,
     headers: HeaderMap,
@@ -283,9 +394,24 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
     }
 
     let writer = session.clone();
+    // Told by the loop below when the child has gone, so the announcement is
+    // written by the task that owns the sink.
+    let (child_gone, mut gone) = tokio::sync::oneshot::channel::<()>();
+    let mut finished = Some(child_gone);
     let mut pump = tokio::spawn(async move {
         loop {
-            match feed.recv().await {
+            let received = tokio::select! {
+                // Biased so buffered output always wins a tie: the last thing a
+                // command printed must reach the client before the notice that
+                // it finished, or `dpctl run` loses its final line.
+                biased;
+                chunk = feed.recv() => chunk,
+                _ = &mut gone => {
+                    let _ = tx.send(Message::Text(json(&ServerMsg::Exit).into())).await;
+                    break;
+                }
+            };
+            match received {
                 Ok(chunk) => {
                     if tx.send(Message::Binary(chunk.as_slice().to_vec().into())).await.is_err() {
                         break;
@@ -311,9 +437,43 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
         }
     });
 
+    // The child dying is the one thing a client cannot work out for itself.
+    //
+    // `Exit` used to be sent only when the broadcast channel closed, which
+    // happens when the *session* is dropped — and a session stays in the map
+    // after its child is gone, so that never fired for a command that simply
+    // finished. Every client was left waiting on a socket that would never say
+    // anything again: the web terminal showed a live session, and
+    // `dpctl run box -- cmd` hung forever after printing its output.
+    //
+    // Polled rather than signalled because `alive` is an AtomicBool and giving
+    // it a Notify means threading one through the pty reader for a quarter of a
+    // second of latency nobody can perceive.
+    // `interval_at`, not `interval`: the latter completes its first tick
+    // immediately, so a command that finishes fast — which is every `dpctl run`
+    // — was declared over before the pump had written a single byte.
+    let beat = std::time::Duration::from_millis(250);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + beat, beat);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             _ = &mut pump => break,
+            _ = heartbeat.tick() => {
+                if !session.is_alive() {
+                    // Whatever the child printed on its way out is already in
+                    // the broadcast; yielding lets the pump drain it before the
+                    // close, so the last line of output is not lost to the
+                    // notice that the command finished.
+                    // The pump announces it, because the pump owns the sink.
+                    // It drains whatever the child printed on its way out
+                    // first — see the `biased` there.
+                    let _ = finished.take().map(|f| f.send(()));
+                    // Give it a tick to write the frame before the socket goes.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    break;
+                }
+            }
             msg = rx.next() => {
                 let Some(Ok(msg)) = msg else { break };
                 match msg {
@@ -330,6 +490,7 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
     }
     pump.abort();
 }
+
 
 fn json<T: Serialize>(v: &T) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
