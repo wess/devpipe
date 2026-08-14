@@ -25,6 +25,11 @@ else
   cargo build --target "$RUST_TARGET"
 fi
 LIBDIR="$ROOT/core/target/$RUST_TARGET/$CONFIG"
+# The archive by path, never `-L … -ldevpipecore`. `core` builds as staticlib
+# *and* cdylib, so both a `.a` and a `.dylib` sit in there and ld prefers the
+# dylib — baking this machine's absolute path in as a load command. It works on
+# the simulator only because the simulator shares the host filesystem, which is
+# what hid it: the identical mistake killed the device build before `main`.
 
 echo "==> app bundle"
 rm -rf "$APP"
@@ -42,7 +47,7 @@ xcrun -sdk iphonesimulator swiftc \
   $([ "$CONFIG" = "release" ] && echo "-O" || echo "-Onone -g") \
   -import-objc-header "$IOS/include/bridge.h" \
   -I "$IOS/include" \
-  -L "$LIBDIR" -ldevpipecore \
+  "$LIBDIR/libdevpipecore.a" \
   -o "$APP/Devpipe" \
   "$IOS"/Sources/*.swift
 
