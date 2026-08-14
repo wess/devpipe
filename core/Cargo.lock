@@ -125,7 +125,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "vt"
-version = "1.32.4"
+version = "1.33.0"
 dependencies = [
  "bitflags 2.13.1",
  "flate2",
