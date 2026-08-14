@@ -42,10 +42,27 @@ final class PinnedTrust: NSObject, URLSessionDelegate {
             return
         }
 
-        // Refusing to connect at all is the right failure when no pin is set.
-        // Falling back to system trust would silently accept any certificate a
-        // CA happened to issue for whatever address we dialled.
-        guard isConfigured, let leaf = leafCertificate(of: trust) else {
+        // No pin means system trust, and that is the right answer now rather
+        // than a concession.
+        //
+        // This used to refuse outright, correctly: the daemon served its own
+        // self-signed certificate, so a CA-issued one for the address we
+        // dialled proved nothing. That is no longer how a box is reached.
+        // Every box has its own name under devpipe.com and a real Let's
+        // Encrypt certificate for it, terminated by Caddy — the whole point of
+        // the DNS-and-ACME arrangement, and the reason Info.plist needs no ATS
+        // exceptions. The hostname itself arrives from `/boxes/:id/connection`
+        // over an already-authenticated TLS channel.
+        //
+        // Leaving it as a refusal is what made the iPad terminal blank: the
+        // app passes no fingerprint, so *every* websocket to a box was
+        // cancelled before it opened. A session appeared in the sidebar,
+        // because the control plane created it, and nothing ever attached.
+        guard isConfigured else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let leaf = leafCertificate(of: trust) else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }

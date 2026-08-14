@@ -115,7 +115,19 @@ final class TerminalController: ObservableObject {
         }
         if let ws = newSource as? WebSocketSource {
             ws.onState = { [weak self] s in
-                DispatchQueue.main.async { self?.status = s }
+                DispatchQueue.main.async {
+                    self?.status = s
+                    // An attach replaces the whole screen: the daemon replays
+                    // the session's current contents, which has nothing to do
+                    // with what this view was showing. Without repainting all
+                    // of it the replay lands in the emulator and stays
+                    // invisible — the terminal reads as empty until a
+                    // keystroke happens to dirty a row. The web client has
+                    // carried this fix from the start; this one did not.
+                    if s.hasPrefix("attached") || s == "connected" || s == "caught up" {
+                        self?.view?.invalidateAll()
+                    }
+                }
                 log.info("source: \(s)")
             }
         }
