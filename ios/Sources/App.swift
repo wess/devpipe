@@ -172,6 +172,9 @@ final class Workspace: ObservableObject {
     @Published var loading = true
     /// What each tool is called and how it starts. Fetched, never hardcoded.
     @Published var catalog: [Control.Tool] = []
+    @Published var sizes: [Control.Size] = []
+    @Published var regions: [Control.Region] = []
+    @Published var defaultTools: [String] = []
     /// The build log of the box being watched, oldest first.
     @Published var buildLog: [Control.BoxEvent] = []
     /// A wake or a build in flight, so the button can say so.
@@ -212,7 +215,20 @@ final class Workspace: ObservableObject {
     /// Once per sign-in. The catalogue changes when the product ships, not
     /// while somebody is looking at it.
     func loadCatalog() async {
-        if let out = try? await control.catalog() { catalog = out.tools }
+        guard let out = try? await control.catalog() else { return }
+        catalog = out.tools
+        sizes = out.sizes
+        regions = out.regions
+        defaultTools = out.defaults
+    }
+
+    /// Make a box, and start watching it build.
+    func create(_ spec: Control.NewBox) async throws -> Control.Box {
+        let made = try await control.createBox(spec)
+        buildLog = []
+        logCursor = 0
+        await refreshBoxes()
+        return made
     }
 
     /// Build the droplet back, then watch until it answers.
@@ -427,6 +443,7 @@ struct Gate: View {
 struct ContentView: View {
     @StateObject private var controller = TerminalController()
     @StateObject private var workspace = Workspace()
+    @State private var making = false
 
     var body: some View {
         Group {
@@ -444,6 +461,11 @@ struct ContentView: View {
         .task {
             await workspace.restore()
             workspace.startPolling()
+        }
+        .sheet(isPresented: $making) {
+            NewBoxSheet(workspace: workspace) {
+                Task { await workspace.openBox() }
+            }
         }
     }
 
@@ -479,8 +501,12 @@ struct ContentView: View {
                 Image(systemName: workspace.boxes.isEmpty ? "server.rack" : "moon.zzz")
                     .font(.system(size: 26))
                 if workspace.boxes.isEmpty {
-                    Text("You do not have a box yet. Set one up on devpipe.com.")
+                    Text("You do not have a box yet.")
                         .font(.system(size: 13, design: .monospaced))
+                    Button("Make one") { making = true }
+                    Text("About three minutes from here to a shell.")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.gray.opacity(0.7))
                 } else if let box = workspace.box, box.asleep {
                     Text("\(box.name) is asleep. Its work is still on its workspace.")
                         .font(.system(size: 13, design: .monospaced))
@@ -546,7 +572,19 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionHead("BOXES")
+            HStack {
+                sectionHead("BOXES")
+                Spacer()
+                Button {
+                    making = true
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.gray)
+                .padding(.trailing, 12)
+                .padding(.top, 14)
+            }
             ForEach(workspace.boxes) { box in
                 Button {
                     workspace.selectedBox = box.id

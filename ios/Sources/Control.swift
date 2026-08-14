@@ -65,8 +65,36 @@ struct Control {
         let launch: [String]?
     }
 
+    struct Size: Codable, Identifiable, Equatable {
+        let slug: String
+        let label: String
+        let memoryMb: Int
+        let monthly: Int
+        var id: String { slug }
+    }
+
+    struct Region: Codable, Identifiable, Equatable {
+        let slug: String
+        let label: String
+        var id: String { slug }
+    }
+
     struct Catalog: Codable {
         let tools: [Tool]
+        var sizes: [Size] = []
+        var regions: [Region] = []
+        /// Tool ids a box gets when nobody chooses.
+        var defaults: [String] = []
+    }
+
+    /// What a box is made of. Everything has a server-side default, so a
+    /// client that sends none of it still gets a working machine.
+    struct NewBox {
+        var name = ""
+        var region = ""
+        var size = ""
+        var tools: [String] = []
+        var shell = "bash"
     }
 
     /// A line the box printed while building itself.
@@ -236,6 +264,16 @@ struct Control {
     /// polls, which it is doing anyway.
     func wake(box: Int) async throws {
         _ = try await send("POST", "/api/boxes/\(box)/wake", as: [String: Bool].self)
+    }
+
+    /// Make one. The control plane answers immediately with the row; the
+    /// machine takes about three minutes and reports as it goes.
+    func createBox(_ spec: NewBox) async throws -> Box {
+        var body: [String: Any] = ["tools": spec.tools, "shell": spec.shell]
+        if !spec.name.isEmpty { body["name"] = spec.name }
+        if !spec.region.isEmpty { body["region"] = spec.region }
+        if !spec.size.isEmpty { body["size"] = spec.size }
+        return try await send("POST", "/api/boxes", body: body, as: Box.self)
     }
 
     func destroy(box: Int) async throws {
