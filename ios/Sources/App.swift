@@ -8,6 +8,28 @@ import UIKit
 ///     --predicate 'subsystem == "io.wess.devpipe"'
 let log = Logger(subsystem: "io.wess.devpipe", category: "spike")
 
+/// Says it twice, on purpose.
+///
+/// `Logger` goes to the unified log, which is the right place for it and is
+/// also unreachable from a Mac: `log stream --device-udid` no longer exists,
+/// and `devicectl` has no equivalent. What a connected Mac *can* read is the
+/// process's stdout, over `devicectl device process launch --console`. So
+/// anything worth diagnosing from outside goes to both.
+///
+/// This is not academic. The terminal stayed blank because every websocket was
+/// being cancelled by the pin check, and the app knew — it reported
+/// "reconnecting in 4s" to a logger nothing was reading. One line on stdout
+/// would have named it in seconds rather than after reading the TLS delegate.
+///
+/// Never called with anything typed into a terminal. Keystrokes carry
+/// passwords and tokens; `Daemon.swift` says why that path stays silent.
+func trace(_ what: String) {
+    log.info("\(what, privacy: .public)")
+    print("[devpipe] \(what)")
+    // Line-buffered when it is a pipe, which is exactly the case that matters.
+    fflush(stdout)
+}
+
 /// Where terminal bytes come from. Fixtures for the render spike, a websocket
 /// for a real session; the renderer cannot tell them apart.
 protocol ByteSource: AnyObject {
@@ -116,6 +138,7 @@ final class TerminalController: ObservableObject {
         if let ws = newSource as? WebSocketSource {
             ws.onState = { [weak self] s in
                 DispatchQueue.main.async {
+                    trace("source: \(s)")
                     self?.status = s
                     // An attach replaces the whole screen: the daemon replays
                     // the session's current contents, which has nothing to do
@@ -128,7 +151,6 @@ final class TerminalController: ObservableObject {
                         self?.view?.invalidateAll()
                     }
                 }
-                log.info("source: \(s)")
             }
         }
         newSource.start()
@@ -289,6 +311,7 @@ final class Workspace: ObservableObject {
             }
             await openBox()
         } catch {
+            trace("boxes failed: \(error.localizedDescription)")
             self.error = error.localizedDescription
         }
     }
@@ -321,6 +344,7 @@ final class Workspace: ObservableObject {
         do {
             connection = try await control.connection(box: box.id)
             sessions = try await control.sessions(box: box.id)
+            trace("box \(box.name): \(sessions.count) session(s), daemon \(connection?.url ?? "?")")
             if selectedSession == nil || !sessions.contains(where: { $0.id == selectedSession }) {
                 selectedSession = sessions.first?.id
             }
@@ -525,6 +549,16 @@ struct ContentView: View {
                 hud
                 if workspace.connection != nil, workspace.selectedSession != nil {
                     TerminalHost(controller: controller)
+                        // `.task(id:)` rather than `.onChange`, and this is the
+                        // whole bug: onChange fires on a *change*, and the
+                        // first load has none. `restore()` sets the connection
+                        // and the session before this view exists, so by the
+                        // time anything could observe them they already held
+                        // their values — nothing fired, nothing attached, and
+                        // the pane stayed blank with a session sitting in the
+                        // sidebar. `.task(id:)` runs when the view appears and
+                        // again whenever the key changes, which is both cases.
+                        .task(id: attachKey) { attach() }
                 } else {
                     empty
                 }
@@ -716,12 +750,17 @@ struct ContentView: View {
                     .padding(.bottom, 8)
             }
         }
-        .onChange(of: workspace.selectedSession) { _, _ in attach() }
-        .onChange(of: workspace.connection?.token) { _, _ in attach() }
+    }
+
+    /// The pair that decides which socket should be open. A change in either
+    /// is a different terminal.
+    private var attachKey: String {
+        "\(workspace.connection?.token ?? "-")|\(workspace.selectedSession ?? "-")"
     }
 
     private func attach() {
         guard let conn = workspace.connection, let sid = workspace.selectedSession else { return }
+        trace("attaching to \(sid) on \(conn.url)")
         controller.run(
             WebSocketSource(
                 config: DaemonConfig(

@@ -73,7 +73,7 @@ final class PinnedTrust: NSObject, URLSessionDelegate {
         guard actual.count == expected.count,
               actual.utf8.elementsEqual(expected.utf8)
         else {
-            log.error("certificate does not match the pin (got \(actual, privacy: .public))")
+            trace("certificate does not match the pin (got \(actual))")
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
