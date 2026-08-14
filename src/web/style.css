@@ -225,3 +225,35 @@ select{width:100%;padding:.6rem .7rem;background:var(--panel2);border:1px solid 
    and handed over as a blob, because the route it hits is owner-only. */
 .download{display:inline-flex;align-items:center;gap:.35rem;text-decoration:none;padding:.3rem .6rem;background:none;border:1px solid var(--line);border-radius:7px;color:var(--dim);margin:0 0 .75rem;font-size:.78rem}
 .download:hover:not(:disabled){color:var(--text)}
+
+/* ---- the app shell on a phone ----
+   Android is the web client, so this is not a nicety: the sidebar is 230px
+   and a phone is 390px, which leaves about 27 columns of terminal. Below the
+   breakpoint the sidebar leaves the flow entirely and slides over instead. */
+/* `button.drawer-toggle`, not `.drawer-toggle`: `button.icon` above sets
+   display:inline-flex and out-specifies a bare class, so the toggle showed at
+   every width — including desktop, where the sidebar is already on screen. */
+button.drawer-toggle{display:none}
+.sidebar-scrim{display:none}
+
+@media (max-width: 760px){
+  button.drawer-toggle{display:inline-flex}
+  /* Fixed, not just narrow: taking it out of the flow is what gives the
+     terminal the whole width. The ResizeObserver on the terminal notices and
+     refits, so the pty is asked for the columns actually on screen. */
+  .sidebar{position:fixed;z-index:30;top:0;bottom:0;left:0;width:min(78vw,270px);flex-basis:auto;
+    transform:translateX(-100%);transition:transform .18s ease-out;box-shadow:0 0 2rem rgba(0,0,0,.5)}
+  .sidebar.open{transform:none}
+  .sidebar-scrim{display:block;position:fixed;inset:0;z-index:29;background:rgba(0,0,0,.45);border:0;padding:0}
+  /* The top bar carries five destinations and a brand; on a phone the labels
+     are what has to go, not the destinations. */
+  .topbar{padding:.4rem .5rem;gap:.25rem}
+  .topbar .ghost.small span,.brand span{display:none}
+  .page{padding:.85rem}
+}
+
+/* Respect a system-wide preference for less motion: a drawer that slides is
+   decoration, and the drawer working is not. */
+@media (prefers-reduced-motion: reduce){
+  .sidebar{transition:none}
+}

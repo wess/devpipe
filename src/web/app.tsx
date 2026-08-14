@@ -5,6 +5,7 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  Menu,
   Moon,
   Plus,
   Server,
@@ -334,6 +335,10 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   // Read from a resize callback that must not change identity — see
   // TerminalView, which holds its callbacks in refs so a new function does not
   // reconnect the socket.
+  // Only ever true on a narrow viewport, where the sidebar is a drawer. Above
+  // the breakpoint the CSS ignores it entirely, so there is no second layout
+  // mode to keep in sync — the same markup, positioned differently.
+  const [drawer, setDrawer] = useState(false)
   const activeSessionRef = useRef<string | null>(null)
   activeSessionRef.current = activeSession
 
@@ -478,7 +483,21 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
 
   return (
     <div className="workspace">
-      <aside className="sidebar">
+      {/*
+        Off-canvas below 760px, in the flow above it. The scrim is what makes
+        the drawer dismissable without a second gesture to learn, and it only
+        exists while the drawer is open so it cannot swallow taps meant for the
+        terminal.
+      */}
+      {drawer && (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="Close the sidebar"
+          onClick={() => setDrawer(false)}
+        />
+      )}
+      <aside className={drawer ? "sidebar open" : "sidebar"}>
         <div className="sidebar-section">
           <div className="sidebar-head">
             <span>Boxes</span>
@@ -489,7 +508,14 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           {boxes.length === 0 && <p className="muted small pad">No boxes yet.</p>}
           {boxes.map(b => (
             <div key={b.id} className={`row ${activeBox === b.id ? "on" : ""}`}>
-              <button type="button" className="row-main" onClick={() => setActiveBox(b.id)}>
+              <button
+                type="button"
+                className="row-main"
+                onClick={() => {
+                  setActiveBox(b.id)
+                  setDrawer(false)
+                }}
+              >
                 {b.status === "asleep" ? (
                   <Moon size={13} className="dim" />
                 ) : (
@@ -531,7 +557,14 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           {box?.status === "ready" && sessions.length === 0 && <p className="muted small pad">No terminals open.</p>}
           {sessions.map(s => (
             <div key={s.id} className={`row ${activeSession === s.id ? "on" : ""}`}>
-              <button type="button" className="row-main" onClick={() => setActiveSession(s.id)}>
+              <button
+                type="button"
+                className="row-main"
+                onClick={() => {
+                  setActiveSession(s.id)
+                  setDrawer(false)
+                }}
+              >
                 <CircleDot size={12} className={s.alive ? "ok" : "pending"} />
                 <span className="row-body">
                   <strong>{s.title || commandOf(s.argv) || s.id}</strong>
@@ -561,6 +594,16 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
 
       <main className="stage">
         <div className="stage-bar">
+          {/* Only rendered at all below the breakpoint, where the sidebar is a
+              drawer over the terminal rather than beside it. */}
+          <button
+            type="button"
+            className="icon drawer-toggle"
+            aria-label="Boxes and terminals"
+            onClick={() => setDrawer(d => !d)}
+          >
+            <Menu size={16} />
+          </button>
           <span className="muted small">{box ? `${box.name} · ${box.hostname}` : "No box selected"}</span>
           <span className="grow" />
           <span className="muted small">{status}</span>
