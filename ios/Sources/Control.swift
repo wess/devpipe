@@ -104,6 +104,37 @@ struct Control {
         let line: String
     }
 
+    /// A device signed in to this account.
+    struct Device: Codable, Identifiable, Equatable {
+        let id: Int
+        let user_agent: String
+        let ip: String
+        let last_seen_at: String
+        /// The one making the request. Never offered for revocation, because
+        /// signing yourself out of the screen you are on reads as a crash.
+        let current: Bool
+
+        /// Something a person can recognise, out of a user-agent string.
+        ///
+        /// `dpctl` says who and where it is outright. A browser does not, and
+        /// the full string is forty words of version numbers, so it gets the
+        /// two that identify it.
+        var label: String {
+            if user_agent.hasPrefix("dpctl/") { return user_agent }
+            for name in ["Devpipe", "CriOS", "Firefox", "Edg", "Safari", "Chrome"] {
+                if user_agent.contains(name) {
+                    let os = user_agent.contains("iPad") ? "iPad"
+                        : user_agent.contains("iPhone") ? "iPhone"
+                        : user_agent.contains("Mac") ? "Mac"
+                        : user_agent.contains("Windows") ? "Windows"
+                        : user_agent.contains("Android") ? "Android" : ""
+                    return os.isEmpty ? name : "\(name) on \(os)"
+                }
+            }
+            return user_agent.isEmpty ? "Unknown device" : String(user_agent.prefix(40))
+        }
+    }
+
     struct BoxEvents: Codable {
         let status: String
         let detail: String?
@@ -242,6 +273,36 @@ struct Control {
         let out = try await send("POST", "/api/auth/register", body: body, as: AuthResult.self)
         Control.token = out.token
         return out.user
+    }
+
+    /// Ask for a reset email.
+    ///
+    /// Answers the same either way — an endpoint that says "no such account"
+    /// tells anyone who asks which addresses are registered.
+    func forgotPassword(email: String) async throws {
+        _ = try await send("POST", "/api/auth/forgot", body: ["email": email], as: [String: Bool].self)
+    }
+
+    func updateName(_ name: String) async throws -> User {
+        try await send("PATCH", "/api/me", body: ["name": name], as: User.self)
+    }
+
+    func changePassword(current: String, next: String) async throws {
+        _ = try await send(
+            "POST", "/api/me/password", body: ["current": current, "next": next],
+            as: [String: Bool].self)
+    }
+
+    func devices() async throws -> [Device] {
+        try await send("GET", "/api/sessions", as: [Device].self)
+    }
+
+    func revoke(device: Int) async throws {
+        _ = try await send("DELETE", "/api/sessions/\(device)", as: [String: Bool].self)
+    }
+
+    func revokeOthers() async throws {
+        _ = try await send("DELETE", "/api/sessions", as: [String: Bool].self)
     }
 
     func me() async throws -> User {

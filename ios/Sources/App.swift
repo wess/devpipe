@@ -357,6 +357,7 @@ struct Gate: View {
     @State private var name = ""
     @State private var password = ""
     @State private var error: String?
+    @State private var sent: String?
     @State private var busy = false
 
     var body: some View {
@@ -377,6 +378,12 @@ struct Gate: View {
                 Text(error)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let sent {
+                Text(sent)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.green)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -405,8 +412,18 @@ struct Gate: View {
                 Button(registering ? "I already have an account" : "Create an account") {
                     registering.toggle()
                     error = nil
+                    sent = nil
                 }
                 .font(.system(size: 12))
+                // The link goes to a browser, so only the asking half lives
+                // here — but without it a forgotten password meant finding a
+                // laptop, which is the one thing this app exists to avoid.
+                if !registering {
+                    Button("Forgot your password?") { Task { await forgot() } }
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                        .disabled(busy || email.isEmpty)
+                }
             }
         }
         .textFieldStyle(.roundedBorder)
@@ -418,6 +435,17 @@ struct Gate: View {
                 inviteRequired = state.invite_required
             }
         }
+    }
+
+    private func forgot() async {
+        busy = true
+        error = nil
+        // Answers the same whether or not the address is registered, and says
+        // so in those terms: "if there is an account" is the honest phrasing
+        // and it is also what stops this being a way to test addresses.
+        try? await workspace.control.forgotPassword(email: email)
+        sent = "If there is an account for \(email), a reset link is on its way."
+        busy = false
     }
 
     private func submit() async {
@@ -444,6 +472,7 @@ struct ContentView: View {
     @StateObject private var controller = TerminalController()
     @StateObject private var workspace = Workspace()
     @State private var making = false
+    @State private var account = false
 
     var body: some View {
         Group {
@@ -466,6 +495,9 @@ struct ContentView: View {
             NewBoxSheet(workspace: workspace) {
                 Task { await workspace.openBox() }
             }
+        }
+        .sheet(isPresented: $account) {
+            AccountSheet(workspace: workspace)
         }
     }
 
@@ -656,6 +688,8 @@ struct ContentView: View {
                     }
                     .disabled(workspace.busyBox == workspace.box?.id)
                 }
+                Button("account") { account = true }
+                    .foregroundColor(.gray)
                 Button("sign out") { Task { await workspace.signOut() } }
                     .foregroundColor(.gray)
             }
