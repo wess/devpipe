@@ -146,6 +146,33 @@ The local end binds loopback, never `0.0.0.0` — a forward bound to every
 interface republishes the box's private port to whatever network the laptop is
 on, which is a coffee shop about half the time.
 
+`dpctl ls / pull / push / edit` move files over `/v1/fs/*` on the same door with
+the same bearer, rather than reopening SSH — which a box locks down on purpose
+(`DisableForwarding yes`) and whose host key changes on every wake, because
+waking builds a new machine.
+
+**There is no path jail, and that is the considered answer.** The bearer that
+reaches `/v1/fs` is the same one that spawns a process on `/v1/sessions`, which
+is a root shell — so a restriction would stop nothing an attacker could not do
+in one more request, while breaking the legitimate case of reading a config
+outside the home directory. The credential is the boundary, and it never leaves
+the control plane on the web path or the client's keychain on the `dpctl` path.
+
+Two asymmetries, both deliberate:
+
+- A directory comes **down** as a `tar` stream and goes **up** one file at a
+  time. Producing an archive is safe by construction; consuming one is not — the
+  names inside are chosen by whoever made it, and `../../etc/cron.d/x` is the
+  oldest trick there is. Extracting an untrusted archive as root, to save round
+  trips on the rarer direction, is not a trade worth making.
+- A push does not follow symlinks. One pointing outside the tree would copy
+  somebody's whole home directory onto a box by accident; a listing reports a
+  link as a link rather than as its target, for the same reason.
+
+Writes land beside the target and are renamed over it. A half-written file that
+still carries the right name is the failure that costs a morning: an editor opens
+it, an agent reads it, and nothing says it is a torso.
+
 Getting it: `curl -fsSL https://devpipe.com/install.sh | sh`. Served from disk
 by Caddy rather than through the app, so the first thing a new user runs does
 not fail because the API tier is restarting. macOS is one universal binary

@@ -38,6 +38,10 @@ dpctl — your Devpipe box, from this machine
   dpctl run <box> -- <command>    one command, then exit
   dpctl port <box> <port>         reach that port of the box on localhost
                                   (use 9000:3000 to land on a different one)
+  dpctl ls <box> [path]           what is in a directory on the box
+  dpctl pull <box>:<path> [dest]  a file or a whole directory, onto this machine
+  dpctl push <path> <box>:<path>  the other way
+  dpctl edit <box>:<path>         open it in $EDITOR and send back what changed
 
 A box that is asleep is woken and waited for. Detach from a session with
 Ctrl-] — the session and everything in it keeps running on the box.
@@ -61,6 +65,12 @@ fn main() {
         ["connect", name, rest @ ..] => connect(name, rest),
         ["run", name, rest @ ..] => run(name, rest),
         ["port", name, spec] => port(name, spec),
+        ["ls", name] => ls(name, None),
+        ["ls", name, path] => ls(name, Some(path)),
+        ["pull", spec] => pull(spec, None),
+        ["pull", spec, dest] => pull(spec, Some(dest)),
+        ["push", local, spec] => push(local, spec),
+        ["edit", spec] => edit(spec),
         other => {
             eprintln!("dpctl: unknown command `{}`\n", other.join(" "));
             eprint!("{USAGE}");
@@ -966,5 +976,336 @@ mod keychain {
             let _ = std::fs::remove_file(path);
         }
         Ok(())
+    }
+}
+
+// ---- files ----------------------------------------------------------------
+
+/// Moving a file between a box and this machine.
+///
+/// The gap was total: not a spec to hand an agent, not an artifact it made, not
+/// the one file you would rather fix in your own editor. The workarounds were a
+/// git round-trip for things that are not code, or a heredoc down a terminal.
+///
+/// It goes over the daemon's own door with the daemon's own bearer — the same
+/// one `connect` and `port` use — rather than reopening SSH, which a box locks
+/// down on purpose and whose host key changes on every wake.
+
+/// `box:/path` — scp's spelling, because that is the shape people expect.
+fn split_remote(spec: &str) -> Option<(&str, &str)> {
+    let (name, path) = spec.split_once(':')?;
+    if name.is_empty() || path.is_empty() { None } else { Some((name, path)) }
+}
+
+/// Percent-encoding for a query value. Everything but the unreserved set, so a
+/// path with a space, a `#`, or a `&` in it survives the trip.
+fn encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// The daemon speaks HTTPS on the same name it speaks websockets on.
+fn http_base(reached: &Reached) -> String {
+    reached.url.replacen("wss://", "https://", 1).replacen("ws://", "http://", 1)
+}
+
+fn fs_url(reached: &Reached, endpoint: &str, path: &str) -> String {
+    format!("{}/v1/fs/{endpoint}?path={}", http_base(reached), encode(path))
+}
+
+/// What the daemon said went wrong, rather than a bare status code.
+fn box_error(err: ureq::Error) -> String {
+    match err {
+        ureq::Error::Status(_, response) => {
+            let said = response.into_string().unwrap_or_default();
+            let said = said.trim();
+            if said.is_empty() { "the box refused that".into() } else { said.to_string() }
+        }
+        other => other.to_string(),
+    }
+}
+
+fn authed(req: ureq::Request, reached: &Reached) -> ureq::Request {
+    req.set("authorization", &format!("Bearer {}", reached.token))
+}
+
+fn ls(name: &str, path: Option<&str>) -> i32 {
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
+    };
+    let url = fs_url(&reached, "list", path.unwrap_or("~"));
+    let listing: Value = match authed(ureq::get(&url), &reached).call() {
+        Ok(r) => r.into_json().unwrap_or(Value::Null),
+        Err(e) => return fail(&box_error(e)),
+    };
+
+    println!("{}", listing.get("path").and_then(Value::as_str).unwrap_or(""));
+    for entry in listing.get("entries").and_then(Value::as_array).into_iter().flatten() {
+        let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+        let dir = entry.get("dir").and_then(Value::as_bool).unwrap_or(false);
+        let link = entry.get("link").and_then(Value::as_bool).unwrap_or(false);
+        let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
+        // The mark goes on the name rather than in a column: a listing is read
+        // down the left edge, and a size column nobody asked for pushes the
+        // only thing anybody is looking for off to the right.
+        let mark = if link { "@" } else if dir { "/" } else { "" };
+        if dir {
+            println!("  {name}{mark}");
+        } else {
+            println!("  {name}{mark}  {}", human(size));
+        }
+    }
+    0
+}
+
+fn human(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{bytes} B") } else { format!("{size:.1} {}", UNITS[unit]) }
+}
+
+/// A file or a directory, off the box and onto this machine.
+fn pull(spec: &str, dest: Option<&str>) -> i32 {
+    let Some((name, remote)) = split_remote(spec) else {
+        return fail("A pull looks like `dpctl pull mybox:~/notes.md .`");
+    };
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
+    };
+
+    // Asked once, so the two shapes are not two round trips and a guess.
+    let listed = authed(ureq::get(&fs_url(&reached, "list", remote)), &reached).call();
+    let is_dir = listed.is_ok();
+
+    let leaf = remote.trim_end_matches('/').rsplit('/').next().unwrap_or("download");
+    let dest = std::path::PathBuf::from(dest.unwrap_or("."));
+    let target = if dest.is_dir() { dest.join(leaf) } else { dest };
+
+    if is_dir {
+        // Straight into tar rather than through a temporary file: a project is
+        // the common case and it does not want to land on disk twice.
+        let response = match authed(ureq::get(&fs_url(&reached, "tar", remote)), &reached).call() {
+            Ok(r) => r,
+            Err(e) => return fail(&box_error(e)),
+        };
+        let into = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+        if let Err(e) = std::fs::create_dir_all(into) {
+            return fail(&format!("{}: {e}", into.display()));
+        }
+        let spawned = std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg("-")
+            .arg("-C")
+            .arg(into)
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => return fail(&format!("tar: {e}")),
+        };
+        let mut reader = response.into_reader();
+        let mut stdin = child.stdin.take().expect("piped");
+        if let Err(e) = std::io::copy(&mut reader, &mut stdin) {
+            return fail(&format!("the download stopped: {e}"));
+        }
+        drop(stdin);
+        match child.wait() {
+            Ok(status) if status.success() => {
+                println!("{} -> {}", spec, into.join(leaf).display());
+                0
+            }
+            Ok(_) => fail("tar could not unpack that"),
+            Err(e) => fail(&format!("tar: {e}")),
+        }
+    } else {
+        let response = match authed(ureq::get(&fs_url(&reached, "read", remote)), &reached).call() {
+            Ok(r) => r,
+            Err(e) => return fail(&box_error(e)),
+        };
+        if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return fail(&format!("{}: {e}", parent.display()));
+        }
+        let mut file = match std::fs::File::create(&target) {
+            Ok(f) => f,
+            Err(e) => return fail(&format!("{}: {e}", target.display())),
+        };
+        match std::io::copy(&mut response.into_reader(), &mut file) {
+            Ok(bytes) => {
+                println!("{} -> {} ({})", spec, target.display(), human(bytes));
+                0
+            }
+            Err(e) => fail(&format!("the download stopped: {e}")),
+        }
+    }
+}
+
+/// A file or a directory, off this machine and onto the box.
+///
+/// A directory goes up one file at a time rather than as an archive, which is
+/// slower and is the point: unpacking an archive on the box means trusting the
+/// names inside it, as root. Downloads have no such problem, which is why they
+/// are allowed the shortcut.
+fn push(local: &str, spec: &str) -> i32 {
+    let Some((name, remote)) = split_remote(spec) else {
+        return fail("A push looks like `dpctl push ./notes.md mybox:~/notes.md`");
+    };
+    let source = std::path::PathBuf::from(local);
+    let meta = match std::fs::metadata(&source) {
+        Ok(m) => m,
+        Err(e) => return fail(&format!("{local}: {e}")),
+    };
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
+    };
+
+    if meta.is_file() {
+        return match put_one(&reached, &source, remote) {
+            Ok(bytes) => {
+                println!("{local} -> {spec} ({})", human(bytes));
+                0
+            }
+            Err(e) => fail(&e),
+        };
+    }
+
+    let mut sent = 0u64;
+    let mut files = 0u64;
+    let mut stack = vec![source.clone()];
+    while let Some(dir) = stack.pop() {
+        let read = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(e) => return fail(&format!("{}: {e}", dir.display())),
+        };
+        for item in read.flatten() {
+            let path = item.path();
+            // Not followed. A link pointing outside the tree would copy
+            // somebody's whole home directory onto a box by accident.
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(&source) else { continue };
+            let target = format!("{}/{}", remote.trim_end_matches('/'), relative.to_string_lossy());
+            match put_one(&reached, &path, &target) {
+                Ok(bytes) => {
+                    sent += bytes;
+                    files += 1;
+                    eprint!("\r{files} file{}, {}   ", if files == 1 { "" } else { "s" }, human(sent));
+                }
+                Err(e) => {
+                    eprintln!();
+                    return fail(&e);
+                }
+            }
+        }
+    }
+    eprintln!();
+    println!("{local} -> {spec} ({files} file{}, {})", if files == 1 { "" } else { "s" }, human(sent));
+    0
+}
+
+fn put_one(reached: &Reached, source: &std::path::Path, remote: &str) -> Result<u64, String> {
+    let file = std::fs::File::open(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    authed(ureq::put(&fs_url(reached, "write", remote)), reached)
+        .set("content-type", "application/octet-stream")
+        .send(file)
+        .map_err(box_error)?;
+    Ok(size)
+}
+
+/// Fetch it, open it in your editor, and send it back if it changed.
+///
+/// The whole reason to want a shared filesystem, in the one case that is worth
+/// having without one: a file on the box that you would rather fix yourself
+/// than describe to an agent.
+fn edit(spec: &str) -> i32 {
+    let Some((name, remote)) = split_remote(spec) else {
+        return fail("An edit looks like `dpctl edit mybox:~/src/main.rs`");
+    };
+    let reached = match reach(name) {
+        Ok(r) => r,
+        Err(e) => return fail(&e),
+    };
+
+    let before = match authed(ureq::get(&fs_url(&reached, "read", remote)), &reached).call() {
+        Ok(r) => {
+            let mut buf = Vec::new();
+            if let Err(e) = std::io::copy(&mut r.into_reader(), &mut buf) {
+                return fail(&format!("the download stopped: {e}"));
+            }
+            buf
+        }
+        Err(e) => return fail(&box_error(e)),
+    };
+
+    let leaf = remote.trim_end_matches('/').rsplit('/').next().unwrap_or("file");
+    let scratch = std::env::temp_dir().join(format!("dpctl-{}-{leaf}", std::process::id()));
+    if let Err(e) = std::fs::write(&scratch, &before) {
+        return fail(&format!("{}: {e}", scratch.display()));
+    }
+
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    // Through a shell, because EDITOR is often more than a program name —
+    // `code --wait`, `emacsclient -nw`.
+    let ran = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("sh")
+        .arg(&scratch)
+        .status();
+    match ran {
+        Ok(status) if status.success() => {}
+        Ok(_) => {
+            let _ = std::fs::remove_file(&scratch);
+            return fail("the editor exited badly; nothing was sent back");
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&scratch);
+            return fail(&format!("{editor}: {e}"));
+        }
+    }
+
+    let after = std::fs::read(&scratch).unwrap_or_default();
+    let _ = std::fs::remove_file(&scratch);
+    if after == before {
+        println!("unchanged");
+        return 0;
+    }
+    // Written whole and renamed on the box, so an agent reading it never sees
+    // half a file.
+    match authed(ureq::put(&fs_url(&reached, "write", remote)), &reached)
+        .set("content-type", "application/octet-stream")
+        .send_bytes(&after)
+    {
+        Ok(_) => {
+            println!("{spec} ({})", human(after.len() as u64));
+            0
+        }
+        Err(e) => fail(&box_error(e)),
     }
 }

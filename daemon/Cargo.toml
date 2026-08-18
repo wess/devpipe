@@ -21,6 +21,10 @@ futures-util = "0.3"
 # not bring in — and TokioIo is what bridges its IO traits to tokio's.
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# `ReaderStream`, so a file comes back as a stream rather than as a Vec. A box
+# has 512MB and what somebody pulls off it is as likely to be a build artifact
+# as a source file.
+tokio-util = { version = "0.7", features = ["io"] }
 libc = "0.2"
 rcgen = "0.13"
 sha2 = "0.10"
@@ -28,7 +32,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util", "fs", "process"] }
 
 # Sinclair's pty and terminal core, unmodified. Path deps for the spike; the
 # same problem devpipecore has, and it wants the same answer.

@@ -10,6 +10,7 @@
 //! the two apart means no escaping, no framing header, and no ambiguity about
 //! what a frame is.
 
+mod files;
 mod proxy;
 mod replay;
 mod session;
@@ -23,7 +24,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, delete, get};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -140,6 +141,14 @@ pub fn router(token: String) -> Router {
         // A dev server on the box, reachable from a browser. Every method, not
         // just GET: a preview that cannot POST is a preview of a page rather
         // than of an application.
+        // Files on the box, in both directions. There was no way to move one
+        // at all — not a spec for an agent to read, not an artifact it made.
+        .route("/v1/fs/list", get(files::list))
+        .route("/v1/fs/read", get(files::read))
+        .route("/v1/fs/write", put(files::write))
+        .route("/v1/fs/tar", get(files::tar))
+        .route("/v1/fs/mkdir", post(files::mkdir))
+        .route("/v1/fs/remove", delete(files::remove))
         .route("/v1/proxy/{port}", any(proxy::proxy_root))
         // Named separately because a wildcard matches at least one segment,
         // and `/` is exactly what a browser asks for first.
@@ -164,6 +173,20 @@ pub async fn serve_tls(
     tls: &tls::Tls,
 ) -> anyhow::Result<()> {
     restore_default_signal_dispositions();
+    // Named, rather than left to rustls to work out.
+    //
+    // Two crates here pull rustls with different backends — axum-server brings
+    // aws-lc-rs, tokio-tungstenite brings ring — and with both compiled in
+    // rustls refuses to guess. It refuses at *runtime*, from inside a worker
+    // thread, as a panic reading "Could not automatically determine the
+    // process-level CryptoProvider": the daemon starts, prints its
+    // certificate fingerprint, and then dies on the first connection.
+    //
+    // Production has never hit it because a box runs this behind Caddy with
+    // DEVPIPE_INSECURE, so nothing on a box takes this path. Anything standing
+    // the daemon up on its own — which is the documented default and what
+    // `deploy/deploy.sh` provisions — takes it every time.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let config = axum_server::tls_rustls::RustlsConfig::from_pem(
         tls.cert_pem.clone().into_bytes(),
         tls.key_pem.clone().into_bytes(),
