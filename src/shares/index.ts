@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { clientIp, consume } from "../security/ratelimit.ts"
 import { audit } from "../util/audit.ts"
 import { randomToken, sha256Hex } from "../util/token.ts"
 
@@ -132,6 +133,18 @@ export const shareRoutes = (db: Connection, appUrl: string) => {
     get("/shares/:token", async (c: Conn) => {
       const share = await byToken(db, String(c.params.token))
       if (!live(share)) {
+        // Only the misses are counted. Somebody holding a working link already
+        // has what the limit protects, and this endpoint is the one place a
+        // search through the token space would be conducted from — a guessed
+        // token here would open somebody's terminal.
+        const hit = await consume(db, `share.miss|ip|${clientIp(c)}`, 30, 300).catch(() => ({
+          ok: true,
+          count: 0,
+          retryAfter: 0,
+        }))
+        if (!hit.ok) {
+          return json(c, 429, { error: "Too many attempts. Try again shortly." })
+        }
         return json(c, 404, { error: "That link is closed. Ask for a new one." })
       }
       return json(c, 200, {

@@ -320,6 +320,18 @@ const InstanceSettings: React.FC<{
           </label>
           <button type="submit">{data.provider.digitalocean ? "Replace" : "Connect"}</button>
         </form>
+        {/* Said rather than left to be assumed. This token creates and destroys
+            every droplet on the account and spends money with no ceiling, and
+            backups of the table it lives in leave the database host. Whether it
+            is readable in one is not a detail to keep to ourselves. */}
+        {data.secrets_sealed === false && (
+          <p className="note warn">
+            Provider and Stripe credentials are stored <strong>unencrypted</strong>, because
+            <code> DEVPIPE_SECRET_KEY</code> is not set on this instance. Generate one with
+            <code> openssl rand -base64 32</code>, add it to <code>/etc/devpipe.env</code>, and restart —
+            existing values are encrypted the next time they are read.
+          </p>
+        )}
         {data.provider.digitalocean && (
           <button
             type="button"

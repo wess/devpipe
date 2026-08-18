@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { consume } from "../security/ratelimit.ts"
 import { getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 import { sign, unsign } from "../util/signed.ts"
@@ -75,8 +76,17 @@ const bySlug = async (db: Connection, slug: string) =>
  * `p-` prefixed, which is what keeps it clear of the space box hostnames live
  * in: a box is `<username>-<short>`, and a username is at least three
  * characters, so nothing anybody can register produces a first segment of `p`.
+ *
+ * Twenty-two characters, not ten. For a `link` preview the hostname *is* the
+ * credential — there is nothing else between a stranger and somebody's staging
+ * site — so it is sized like one: about 104 bits, against the 47 that ten gave.
+ * A private preview gets the same, because `audience` can be changed later and
+ * a short slug would quietly become the secret at that moment.
+ *
+ * DNS allows 63 characters in a label, so this costs nothing but the width of a
+ * URL nobody types by hand.
  */
-const newSlug = () => `p-${shortId(10)}`
+const newSlug = () => `p-${shortId(22)}`
 
 export const previewUrl = (slug: string, domain: string) => `https://${slug}.${domain}`
 
@@ -143,6 +153,40 @@ const HOP = new Set([
   "transfer-encoding",
   "upgrade",
 ])
+
+/**
+ * The address a request came from, for counting guesses against.
+ *
+ * The same rule `clientIp` uses and for the same reason: on a request that did
+ * not come through Caddy the whole header is attacker-chosen, so only the last
+ * hop is trusted and it is truncated before it reaches an index.
+ */
+const addressOf = (req: Request): string => {
+  const hops = (req.headers.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map(part => part.trim())
+    .filter(Boolean)
+  const last = hops[hops.length - 1]
+  return last ? last.slice(0, 64) : "unknown"
+}
+
+/**
+ * Guessing at preview hostnames, counted.
+ *
+ * Only misses. A preview serves a website, and a single page load is thirty
+ * requests — metering those would break the feature to defend nothing, because
+ * somebody with a working link already has the thing the limit protects. What
+ * is worth counting is the request for a slug that does not exist, which is
+ * what a search through the namespace looks like and what a person with a real
+ * link almost never produces.
+ *
+ * This has to be here rather than in the pipeline: the preview host is answered
+ * ahead of the router, deliberately — it must not inherit this instance's
+ * headers — which means it is also ahead of every rate limiter attached to a
+ * route.
+ */
+const MISS_LIMIT = 60
+const MISS_WINDOW = 300
 
 /** Something to look at when the answer is not a dev server's. */
 const page = (title: string, body: string, status: number) =>
@@ -386,6 +430,15 @@ export const previewHost = (db: Connection, appUrl: string) => {
 
     const preview = await bySlug(db, label)
     if (!live(preview)) {
+      const hit = await consume(db, `preview.miss|ip|${addressOf(req)}`, MISS_LIMIT, MISS_WINDOW).catch(
+        () => ({ ok: true, count: 0, retryAfter: 0 }),
+      )
+      if (!hit.ok) {
+        return new Response("Too many requests\n", {
+          status: 429,
+          headers: { "retry-after": String(hit.retryAfter), "content-type": "text/plain" },
+        })
+      }
       return page(
         "This preview is closed",
         "The link was revoked or has expired. Ask whoever sent it for a new one.",

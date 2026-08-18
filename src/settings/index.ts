@@ -1,5 +1,6 @@
 import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
+import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 
 /**
  * Instance settings and provider credentials.
@@ -161,6 +162,39 @@ export const setSetting = async (db: Connection, key: string, value: string): Pr
 
 // ---- credentials ----------------------------------------------------------
 
+/**
+ * The instance's own secrets, encrypted at rest.
+ *
+ * These were plaintext, and of everything in this database they are the worst
+ * things to leave that way. The DigitalOcean token creates and destroys every
+ * droplet on the account, detaches volumes, and spends money with no ceiling;
+ * the Stripe secret key moves other people's. Agent logins have been sealed
+ * since they shipped precisely because they "can spend their money" — the same
+ * sentence is true of these, about *your* money, and they were the ones left
+ * readable by anyone with a `psql` session or a copy of last night's backup.
+ * Backups are rsynced off the database host, so that is more than one place.
+ *
+ * Bound to the row they belong to. Without the AAD, a sealed value could be
+ * moved from `stripe_secret_key` into `digitalocean_token` and the instance
+ * would decrypt it happily and hand it to the provider client — encryption
+ * stops a value being *read*, and only binding stops it being *moved*.
+ *
+ * Plaintext rows still open. An instance that upgrades into this has values
+ * written before it existed, and refusing to read them would take box
+ * provisioning down on deploy; they are sealed in place the first time they are
+ * read. Where there is no `DEVPIPE_SECRET_KEY` at all, storage stays plaintext
+ * rather than refusing — unlike an agent login, the provider token is what the
+ * product needs to function, and a control plane that cannot provision is not a
+ * safer control plane. `credentialsSealed` is how a screen can say which it is
+ * rather than implying the stronger one.
+ */
+const SEALED_PREFIX = "v1."
+
+const contextFor = (key: string) => `credential:${key}`
+
+/** Whether this instance is encrypting its own secrets at rest. */
+export const credentialsSealed = (): boolean => secretsAvailable()
+
 export const CREDENTIAL = {
   digitalOceanToken: "digitalocean_token",
   stripeSecretKey: "stripe_secret_key",
@@ -172,19 +206,50 @@ export const CREDENTIAL = {
 
 export const getCredential = async (db: Connection, key: string): Promise<string | null> => {
   const row = (await db.one(from("credentials").where(q => q("key").equals(key)))) as any
-  return row?.value ?? null
+  const stored = row?.value ?? null
+  if (stored === null) return null
+
+  if (stored.startsWith(SEALED_PREFIX)) {
+    const opened = await open(stored, contextFor(key)).catch(() => null)
+    if (opened === null) {
+      // A key that has been rotated, or a value moved between rows. Reported
+      // rather than swallowed: every symptom downstream is "DigitalOcean
+      // rejected the API token", which sends somebody to the provider console
+      // to check a token that is fine.
+      console.error(`[devpipe] ${key} could not be decrypted — has DEVPIPE_SECRET_KEY changed?`)
+    }
+    return opened
+  }
+
+  // Written before this instance sealed anything. Sealed in place on the way
+  // past, so upgrading needs no migration and no manual step — and so the
+  // plaintext stops existing at the first read rather than at the next write,
+  // which for a provider token could be never.
+  if (secretsAvailable()) {
+    void seal(stored, contextFor(key))
+      .then(sealed =>
+        db.execute(
+          from("credentials")
+            .where(q => q("key").equals(key))
+            .update({ value: sealed, updated_at: new Date() }),
+        ),
+      )
+      .catch(err => console.error(`[devpipe] could not seal ${key}:`, err))
+  }
+  return stored
 }
 
 export const setCredential = async (db: Connection, key: string, value: string): Promise<void> => {
+  const stored = secretsAvailable() ? await seal(value, contextFor(key)) : value
   const existing = (await db.one(from("credentials").where(q => q("key").equals(key)))) as any
   if (existing) {
     await db.execute(
       from("credentials")
         .where(q => q("key").equals(key))
-        .update({ value, updated_at: new Date() }),
+        .update({ value: stored, updated_at: new Date() }),
     )
   } else {
-    await db.execute(from("credentials").insert({ key, value }))
+    await db.execute(from("credentials").insert({ key, value: stored }))
   }
 }
 

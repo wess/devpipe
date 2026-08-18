@@ -378,7 +378,12 @@ export const adminUsers = () =>
 export const adminSuspend = (id: number, suspended: boolean) =>
   call<{ ok: boolean; sessions?: number; boxes?: number }>("PATCH", `/admin/users/${id}`, { suspended })
 export const adminSettings = () =>
-  call<{ settings: Record<string, string>; provider: { digitalocean: string | null } }>("GET", "/admin/settings")
+  call<{
+    settings: Record<string, string>
+    provider: { digitalocean: string | null }
+    /** Whether this instance encrypts its own credentials at rest. */
+    secrets_sealed: boolean
+  }>("GET", "/admin/settings")
 export const adminSaveSettings = (values: Record<string, string>) =>
   call<Record<string, string>>("PATCH", "/admin/settings", values)
 export const adminSaveProvider = (t: string) =>

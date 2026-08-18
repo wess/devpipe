@@ -327,3 +327,52 @@ sign-in happens in the terminal, on the real origin, once.
   every box on the account. If the control plane host is compromised, revoking
   that token in the DigitalOcean console is the remedy; deleting it from the
   admin screen is not.
+
+## The instance's own credentials
+
+The DigitalOcean token and the Stripe secret key are encrypted at rest with the
+same AES-256-GCM and the same `DEVPIPE_SECRET_KEY` as an agent login. They were
+plaintext, which made them the worst things in the database: the provider token
+creates and destroys every droplet on the account, detaches volumes and spends
+money with no ceiling, and nightly backups of that table are rsynced off the
+database host — so "readable with a `psql` session" understated it.
+
+Each is bound to its own row with `credential:<key>` as additional authenticated
+data. Encryption stops a value being read; only binding stops it being *moved* —
+without it, the Stripe key could be copied into the provider row and the
+instance would decrypt it happily and hand it to DigitalOcean.
+
+Two deliberate differences from agent logins:
+
+- **A plaintext row still opens**, and is sealed in place on the way past.
+  Refusing them would have taken provisioning down on the deploy that shipped
+  this, and sealing on read rather than on next write means the plaintext stops
+  existing at the first use rather than at a write that, for a provider token,
+  may never come.
+- **Without a key, storage stays plaintext** rather than refusing. An agent
+  login is optional and an instance that declines to keep one still works; the
+  provider token is what the product runs on, and a control plane that cannot
+  provision is not a safer control plane. What matters is that nothing implies
+  otherwise, so `/admin/settings` returns `secrets_sealed` and the screen says
+  so in as many words.
+
+## Guessing
+
+Two things here are reachable without an account, because that is the point of
+them: a `link` preview's hostname and a share token. Both are therefore sized as
+credentials — 22 characters of a 27-letter alphabet for a slug (~104 bits), 32
+random bytes for a share — and `shortId` draws them by rejection rather than
+`byte % 27`, which is not uniform and gave the first thirteen letters an 11%
+edge.
+
+Both count **misses** against the address, and neither counts hits. A preview
+serves a website and one page load is thirty requests; metering those would
+break the feature to defend nothing, since somebody holding a working link
+already has what the limit protects. A request for a slug that does not exist is
+what a search through the namespace looks like, and what somebody with a real
+link almost never produces.
+
+The preview host is answered ahead of the router — deliberately, so it cannot
+inherit this instance's `Content-Security-Policy` — which puts it ahead of every
+rate limiter attached to a route. `consume()` is called there directly for
+exactly that reason.

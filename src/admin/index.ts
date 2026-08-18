@@ -9,6 +9,7 @@ import {
   CREDENTIAL,
   clearCredential,
   credentialHint,
+  credentialsSealed,
   getCredential,
   setCredential,
   setSetting,
@@ -130,6 +131,10 @@ export const adminRoutes = (db: Connection) => {
         return json(c, 200, {
           settings,
           provider: { digitalocean: credentialHint(token) },
+          // Said rather than assumed. Without DEVPIPE_SECRET_KEY the provider
+          // token is stored as typed, and a screen that showed no difference
+          // would be implying a protection this instance does not have.
+          secrets_sealed: credentialsSealed(),
         })
       }),
     ),

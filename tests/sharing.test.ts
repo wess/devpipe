@@ -141,6 +141,51 @@ describe("previewing a port", () => {
   })
 })
 
+describe("guessing", () => {
+  test("a preview hostname is a credential, and is sized like one", async () => {
+    // For a `link` preview the hostname is the whole thing standing between a
+    // stranger and somebody's staging site. Ten characters of this alphabet is
+    // about 47 bits; twenty-two is about 104.
+    const { data } = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
+    const label = new URL(data.url).host.split(".")[0] as string
+    expect(label.length).toBeGreaterThanOrEqual(24)
+    expect(label).toMatch(/^p-[bcdfghjkmnpqrstvwxz23456789]{22}$/)
+  })
+
+  test("a search through the preview namespace is counted, and a real one is not", async () => {
+    // Only misses. A preview serves a website and one page load is thirty
+    // requests — metering those would break the feature to defend nothing,
+    // because somebody with a working link already has what the limit protects.
+    const seek = (n: number) =>
+      onPreview(`https://p-doesnotexist${n}.${DOMAIN}/`, { headers: { "x-forwarded-for": "198.51.100.7" } })
+
+    let refused = 0
+    for (let n = 0; n < 70; n++) {
+      const res = await host.handle(seek(n))
+      if (res?.status === 429) refused++
+    }
+    expect(refused).toBeGreaterThan(0)
+
+    // A live preview from the same address still answers, because nothing
+    // counted its requests in the first place.
+    stubBox(() => new Response("ok", { status: 200 }))
+    const mine = await call("POST", `/boxes/${boxId}/previews`, { port: 3000, audience: "link" }, token)
+    const res = await host.handle(
+      onPreview(`${mine.data.url}/`, { headers: { "x-forwarded-for": "198.51.100.7" } }),
+    )
+    expect(res?.status).toBe(200)
+  })
+
+  test("a search through the share tokens is counted", async () => {
+    let refused = 0
+    for (let n = 0; n < 40; n++) {
+      const { status } = await call("GET", `/shares/guess-${n}`)
+      if (status === 429) refused++
+    }
+    expect(refused).toBeGreaterThan(0)
+  })
+})
+
 describe("what Caddy is told to issue a certificate for", () => {
   test("yes for a live preview, no for anything else", async () => {
     const { data } = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
