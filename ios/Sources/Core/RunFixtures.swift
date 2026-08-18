@@ -37,7 +37,7 @@ struct RunFixtures {
             Control.Box(
                 id: 1, name: "amber", hostname: "amber.devpipe.com", status: "ready",
                 status_detail: "", ip: "203.0.113.7",
-                tools: ["claude-code", "codex", "asylum"])
+                tools: ["claude-code", "codex", "asylum"], workspace_id: 1)
         ],
         sessions: [
             Control.RemoteSession(

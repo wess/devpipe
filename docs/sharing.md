@@ -78,6 +78,13 @@ has. A watcher can afford a hop; the person working cannot.
 The link is shown once. The row holds `sha256(token)`, so there is nothing to
 show a second time and nothing for a database leak to spend.
 
+**Sleeping a box closes its shares.** A share names a session id on a daemon
+that is about to stop existing, and waking builds a new machine with an empty
+session list — so the link would stay live and connect to nothing forever, which
+a guest cannot tell from a slow box. Previews deliberately survive: they name a
+*port*, and the port is the same one when the box comes back. Both go when the
+box is destroyed. See `src/shares/retire.ts`.
+
 ## What a deploy needs
 
 - `site/deploy.sh` already uploads `site/Caddyfile`, validates it, and reloads

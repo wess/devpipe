@@ -148,6 +148,30 @@ final class Workspace: ObservableObject {
     }
 
     /// Build the droplet back, then watch until it answers.
+    /// Put the box down on purpose.
+    ///
+    /// Everything running on it ends, which is why the callers ask first. The
+    /// files do not: they are on the workspace, which is the only reason this
+    /// is offered at all.
+    func sleep() async {
+        guard let box, box.canSleep else { return }
+        busyBox = box.id
+        do {
+            trace("sleeping \(box.name)")
+            try await control.sleep(box: box.id)
+        } catch {
+            self.error = error.localizedDescription
+            busyBox = nil
+            return
+        }
+        // The machine is gone, so the terminals attached to it are too. Left in
+        // place they are rows that open a socket to a hostname with nothing on
+        // the other end.
+        sessions = []
+        selectedSession = nil
+        await refreshBoxes()
+    }
+
     func wake() async {
         guard let box, box.asleep else { return }
         busyBox = box.id

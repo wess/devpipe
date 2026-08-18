@@ -294,6 +294,15 @@ export const shareSocketUrl = (token: string) =>
   `${location.origin.replace(/^http/, "ws")}/api/shares/${encodeURIComponent(token)}/socket`
 
 export const listBoxes = () => call<Box[]>("GET", "/boxes")
+
+/**
+ * Give the machine back and keep everything else.
+ *
+ * The idle sweep has always done this; this is the same thing asked for. Only
+ * a box with a workspace can be put down — one without it holds the only copy
+ * of its files, and the server refuses rather than losing them.
+ */
+export const sleepBox = (id: number) => call<{ id: number; status: string }>("POST", `/boxes/${id}/sleep`)
 export const createBox = (input: {
   name: string
   region: string

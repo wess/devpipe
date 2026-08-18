@@ -9,12 +9,13 @@ import { setSetting, SETTING } from "../src/settings/index.ts"
 import { db, truncateAll } from "./setup.ts"
 
 /**
- * Waking a box back up.
+ * Putting a box down, and getting it back.
  *
  * Reclaim has had a suite since it shipped; waking has not, which is the wrong
  * way round — sleeping a machine is only safe if the way back is trustworthy.
  * These cover the refusals, because those are what stand between a wake and a
- * workspace mounted in two places at once.
+ * workspace mounted in two places at once, and between a deliberate sleep and
+ * somebody's only copy of their files.
  */
 
 let fetchApp: (req: Request) => Promise<Response>
@@ -59,6 +60,23 @@ const boxRow = async (over: Record<string, unknown> = {}) => {
   return rows[0].id as number
 }
 
+/** Somewhere for a box's files to live, so it is allowed to sleep. */
+const workspaceRow = async () => {
+  const rows = (await db.execute(
+    from("workspaces")
+      .insert({
+        user_id: userId,
+        name: "main",
+        region: "nyc3",
+        size_gb: 10,
+        volume_id: "vol-1",
+        volume_name: "dp-1-main",
+      })
+      .returning("id"),
+  )) as any[]
+  return rows[0].id as number
+}
+
 beforeEach(async () => {
   await truncateAll()
   const { data } = await call("POST", "/auth/register", {
@@ -68,6 +86,60 @@ beforeEach(async () => {
   })
   token = data.token
   userId = data.user.id
+})
+
+describe("putting a box to sleep on purpose", () => {
+  /**
+   * The rule the whole action rests on. Sleeping releases the droplet, so a box
+   * whose files exist only on the droplet loses them — which is the one outcome
+   * a reversible action must not have. The sweep has always refused these; a
+   * person asking is not a reason to be more permissive.
+   */
+  test("never a box without a workspace, however much somebody wants to", async () => {
+    const id = await boxRow({ status: "ready", provider_id: "1", workspace_id: null })
+    const { status, data } = await call("POST", `/boxes/${id}/sleep`, undefined, token)
+    expect(status).toBe(409)
+    expect(data.error).toContain("lose them")
+  })
+
+  test("not one that is still being built", async () => {
+    // Cloud-init is still running on it and a callback is still to come. Taking
+    // the machine away leaves a row waiting for news from a droplet that has
+    // stopped existing.
+    const id = await boxRow({ status: "installing", provider_id: "1", workspace_id: await workspaceRow() })
+    const { status, data } = await call("POST", `/boxes/${id}/sleep`, undefined, token)
+    expect(status).toBe(409)
+    expect(data.error).toContain("finish setting up")
+  })
+
+  test("not one that is already asleep", async () => {
+    const id = await boxRow({ workspace_id: await workspaceRow() })
+    const { status, data } = await call("POST", `/boxes/${id}/sleep`, undefined, token)
+    expect(status).toBe(409)
+    expect(data.error).toContain("already asleep")
+  })
+
+  test("someone else's box is not found rather than forbidden", async () => {
+    const id = await boxRow({ status: "ready", provider_id: "1", workspace_id: await workspaceRow() })
+    await setSetting(db, SETTING.signupsOpen, "1")
+    const other = await call("POST", "/auth/register", {
+      email: "other@devpipe.com",
+      username: "someoneelse",
+      password: "a-very-long-password",
+    })
+    expect((await call("POST", `/boxes/${id}/sleep`, undefined, other.data.token)).status).toBe(404)
+  })
+
+  test("a box that will not give its volume back stays awake", async () => {
+    // No DigitalOcean credential in this suite, so `sleepBox` cannot detach and
+    // returns false. Leaving the box running is the correct outcome: the
+    // alternative destroys a droplet with a volume still attached to it.
+    const id = await boxRow({ status: "ready", provider_id: "1", workspace_id: await workspaceRow() })
+    const { status } = await call("POST", `/boxes/${id}/sleep`, undefined, token)
+    expect(status).toBe(502)
+    const row = (await db.one(from("boxes").where(q => q("id").equals(id)))) as any
+    expect(row.status).toBe("ready")
+  })
 })
 
 describe("waking a box", () => {

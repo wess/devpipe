@@ -1,6 +1,7 @@
 import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
 import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
+import { retireShares } from "../shares/retire.ts"
 import { audit } from "../util/audit.ts"
 import * as ocean from "./digitalocean.ts"
 
@@ -123,8 +124,11 @@ export const setLiveSessions = (fn: typeof liveSessions) => {
  * does: a volume still attached to a droplet that no longer exists is not freed
  * by the droplet going away, and it cannot be attached anywhere else — which
  * would make the box unwakeable as well as still billed.
+ *
+ * `why` is for the one caller that is not the sweep. A box somebody put down on
+ * purpose should not tell them it went idle.
  */
-export const sleepBox = async (db: Connection, box: Idle): Promise<boolean> => {
+export const sleepBox = async (db: Connection, box: Idle, why?: string): Promise<boolean> => {
   const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
   if (!token) return false
 
@@ -160,12 +164,17 @@ export const sleepBox = async (db: Connection, box: Idle): Promise<boolean> => {
       .where(q => q("id").equals(box.id))
       .update({
         status: ASLEEP,
-        status_detail: `asleep after ${box.idleHours}h idle — your files are on its workspace`,
+        status_detail: `${why ?? `asleep after ${box.idleHours}h idle`} — your files are on its workspace`,
         provider_id: null,
         ip: "",
       }),
   )
-  await audit(db, box.userId, "box.slept", `${box.hostname} after ${box.idleHours}h`)
+  // The droplet is gone, so the daemon is gone, so every session id a share
+  // names is gone. Waking builds a new machine with an empty session list —
+  // the link would stay live and connect to nothing. Previews are left alone:
+  // they name a port, and the port comes back.
+  await retireShares(db, box.id)
+  await audit(db, box.userId, "box.slept", `${box.hostname} ${why ?? `after ${box.idleHours}h`}`)
   return true
 }
 

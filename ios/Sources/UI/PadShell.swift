@@ -191,6 +191,10 @@ private struct PadSidebar: View {
 
     @ObservedObject private var runs: RunsModel
 
+    /// Asked before the machine goes, because an agent working through a task
+    /// is a process on it and the process is what ends.
+    @State private var confirmSleep = false
+
     init(
         workspace: Workspace, focus: Binding<PadShell.Focus?>, makingBox: Binding<Bool>,
         showingAccount: Binding<Bool>, showingSettings: Binding<Bool>
@@ -206,6 +210,22 @@ private struct PadSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             boxPicker
+                .confirmationDialog(
+                    "Put \(workspace.box?.name ?? "this box") to sleep?",
+                    isPresented: $confirmSleep,
+                    titleVisibility: .visible
+                ) {
+                    Button("Put it to sleep", role: .destructive) {
+                        Task { await workspace.sleep() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(
+                        workspace.sessions.isEmpty
+                            ? "The machine is given back and stops being charged for. Your files stay, and waking takes about three minutes."
+                            : "\(workspace.sessions.count) terminal\(workspace.sessions.count == 1 ? "" : "s") open on it will end, an agent mid-task included. Your files stay, and waking takes about three minutes."
+                    )
+                }
             Divider().overlay(Design.theme.border.color)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
@@ -320,6 +340,12 @@ private struct PadSidebar: View {
                 }
             }
             Divider()
+            // In the picker rather than beside the machine: the iPad's box
+            // section is a place you go to open a terminal, and an action that
+            // ends every terminal on it does not belong among them.
+            if workspace.box?.canSleep == true {
+                Button("Put it to sleep", systemImage: "moon.zzz") { confirmSleep = true }
+            }
             Button("New box…", systemImage: "plus") { makingBox = true }
         } label: {
             HStack(spacing: 10) {

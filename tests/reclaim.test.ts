@@ -165,6 +165,39 @@ describe("what it does reclaim", () => {
     expect(row.status_detail).toContain("workspace")
   })
 
+  /**
+   * A share names a session id on a daemon that is about to stop existing, and
+   * waking builds a new machine with an empty session list. Left live, the link
+   * opens a socket that connects to nothing, forever, and a guest cannot tell
+   * that from a slow box.
+   *
+   * A preview names a *port*, which is the same port when the box comes back —
+   * so revoking those would mean re-sending every link after every sweep for a
+   * URL that would have kept working.
+   */
+  test("closes the links to its terminals, and keeps the ones to its ports", async () => {
+    const id = await boxAged(500)
+    await db.execute(
+      from("shares").insert({
+        user_id: userId,
+        box_id: id,
+        session_id: "s1",
+        token_hash: "hash",
+        mode: "watch",
+      }),
+    )
+    await db.execute(
+      from("previews").insert({ user_id: userId, box_id: id, port: 3000, slug: "p-abcdefghij" }),
+    )
+
+    await reclaimIdle(db)
+
+    const share = (await db.one(from("shares").where(q => q("box_id").equals(id)))) as any
+    const preview = (await db.one(from("previews").where(q => q("box_id").equals(id)))) as any
+    expect(share.revoked_at).not.toBeNull()
+    expect(preview.revoked_at).toBeNull()
+  })
+
   // A volume still attached to a droplet that no longer exists is not freed by
   // the droplet going away, and cannot be attached anywhere else.
   test("detaches the workspace before releasing the machine", async () => {

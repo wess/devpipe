@@ -309,6 +309,10 @@ private struct BoxTab: View {
     @Binding var makingBox: Bool
     let onOpenURL: (URL) -> Void
 
+    /// Asked before the machine goes, because an agent working through a task
+    /// is a process on it and the process is what ends.
+    @State private var confirmSleep = false
+
     var body: some View {
         NavigationStack(path: $path) {
             Group {
@@ -331,6 +335,22 @@ private struct BoxTab: View {
             .toolbar { toolbar }
             .navigationDestination(for: String.self) { id in
                 terminal(id)
+            }
+            .confirmationDialog(
+                "Put \(workspace.box?.name ?? "this box") to sleep?",
+                isPresented: $confirmSleep,
+                titleVisibility: .visible
+            ) {
+                Button("Put it to sleep", role: .destructive) {
+                    Task { await workspace.sleep() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    workspace.sessions.isEmpty
+                        ? "The machine is given back and stops being charged for. Your files stay, and waking takes about three minutes."
+                        : "\(workspace.sessions.count) terminal\(workspace.sessions.count == 1 ? "" : "s") open on it will end, an agent mid-task included. Your files stay, and waking takes about three minutes."
+                )
             }
         }
     }
@@ -387,6 +407,16 @@ private struct BoxTab: View {
                         Task { await workspace.wake() }
                     }
                     .buttonStyle(FilledButtonStyle(wide: true))
+                    .disabled(workspace.busyBox == box.id)
+                } else if box.canSleep {
+                    // Quiet rather than prominent: the ordinary thing to do
+                    // with a box is use it. This is here so that stopping the
+                    // meter early does not mean destroying the machine, which
+                    // was the only way until now.
+                    Button(workspace.busyBox == box.id ? "Sleeping…" : "Put it to sleep") {
+                        confirmSleep = true
+                    }
+                    .buttonStyle(QuietButtonStyle(wide: true))
                     .disabled(workspace.busyBox == box.id)
                 }
             }

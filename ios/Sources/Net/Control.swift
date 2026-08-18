@@ -41,6 +41,9 @@ struct Control {
         let status_detail: String
         let ip: String
         let tools: [String]
+        /// Where its files live when the machine does not. Optional because a
+        /// box may have none, and that is the whole of `canSleep`.
+        let workspace_id: Int?
 
         /// Ready to be worked on right now.
         var awake: Bool { status == "ready" }
@@ -48,6 +51,10 @@ struct Control {
         var asleep: Bool { status == "asleep" }
         /// Being made or being woken — either way, something to watch.
         var building: Bool { !awake && !asleep && status != "pending_destroy" }
+        /// A box without a workspace holds the only copy of its files, so
+        /// releasing its machine would lose them. The control plane refuses;
+        /// this is so the button is never offered in the first place.
+        var canSleep: Bool { awake && workspace_id != nil }
     }
 
     /// One tool the catalog knows how to install, and how to start it.
@@ -340,6 +347,21 @@ struct Control {
 
     func boxes() async throws -> [Box] {
         try await send("GET", "/api/boxes", as: [Box].self)
+    }
+
+    /// An answer whose shape does not matter, only that it arrived.
+    private struct Ack: Codable {}
+
+    /// Give the machine back and keep everything else.
+    ///
+    /// The idle sweep does this on its own; this is the same thing asked for,
+    /// which is what stops the only way to quit paying for a box early being
+    /// the one action that cannot be undone.
+    func sleep(box: Int) async throws {
+        // A property-less struct decodes any JSON object. The answer is
+        // `{id, status}` — two types in one dictionary, which is exactly what
+        // `[String: String]` cannot hold, and nothing here needs to read it.
+        _ = try await send("POST", "/api/boxes/\(box)/sleep", as: Ack.self)
     }
 
     /// Build the droplet back for a box that went to sleep.

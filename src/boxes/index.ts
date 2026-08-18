@@ -4,6 +4,7 @@ import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
 import { attachSubscription, releaseSubscription, requireSubscriptionForBox } from "../billing/index.ts"
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
+import { retireSharing } from "../shares/retire.ts"
 import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 import { open, seal, secretsAvailable } from "../util/secretbox.ts"
@@ -14,7 +15,7 @@ import { claimForBox } from "../workspaces/index.ts"
 import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
 import * as ocean from "./digitalocean.ts"
-import { ASLEEP } from "./reclaim.ts"
+import { ASLEEP, sleepBox } from "./reclaim.ts"
 
 const publicBox = (row: any) => ({
   id: row.id,
@@ -527,6 +528,70 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
      * and the workspace are all still here. Only the droplet was given back,
      * which is the only part that was being charged for by the hour.
      */
+    /**
+     * Putting a box down on purpose.
+     *
+     * The sweep has always been able to do this; a person could not, which
+     * meant the only way to stop paying for a machine before its idle window
+     * ran out was to destroy it — and destroying is the one action here that
+     * is not reversible. Waking takes about three minutes and brings back the
+     * name, the tools and the files.
+     *
+     * Refused without a workspace, and that refusal is the whole safety of it.
+     * Sleeping releases the droplet, and a box whose files are only on the
+     * droplet loses them. The sweep applies the same rule for the same reason;
+     * this is not a place to be more permissive because somebody asked.
+     */
+    post(
+      "/boxes/:id/sleep",
+      authed(async c => {
+        const me = currentUser(c)
+        const row = (await db.one(
+          from("boxes")
+            .where(q => q("id").equals(Number(c.params.id)))
+            .where(q => q("user_id").equals(me.id))
+            .where(q => q("destroyed_at").isNull()),
+        )) as any
+        if (!row) return json(c, 404, { error: "No such box." })
+        if (row.status === ASLEEP) return json(c, 409, { error: "That box is already asleep." })
+        if (row.status !== "ready") {
+          // A box mid-build has cloud-init running on it and a callback still
+          // to come. Taking the machine away underneath that leaves a row
+          // waiting for news from a droplet that no longer exists.
+          return json(c, 409, { error: "Wait for that box to finish setting up." })
+        }
+        if (!row.workspace_id) {
+          return json(c, 409, {
+            error: "That box has no workspace, so its files only exist on the machine. Sleeping would lose them.",
+          })
+        }
+        if (!row.provider_id) {
+          return json(c, 409, { error: "That box has no machine to release." })
+        }
+
+        const slept = await sleepBox(
+          db,
+          {
+            id: row.id,
+            userId: row.user_id,
+            name: row.name,
+            hostname: row.hostname,
+            providerId: String(row.provider_id),
+            workspaceId: Number(row.workspace_id),
+            idleHours: 0,
+          },
+          "asleep because you asked",
+        )
+        if (!slept) {
+          // `sleepBox` refuses rather than forces when the volume will not
+          // detach, and leaving the box awake is the correct outcome — it is
+          // the alternative that loses a workspace.
+          return json(c, 502, { error: "That box could not be put to sleep. It is still running." })
+        }
+        return json(c, 200, { id: row.id, status: ASLEEP })
+      }),
+    ),
+
     post(
       "/boxes/:id/wake",
       authed(async c => {
@@ -655,6 +720,9 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // Frees the subscription for the next box. It does not cancel it —
         // that is the Stripe portal, and the two are deliberately separate.
         await releaseSubscription(db, row.id)
+        // Neither the sessions nor the ports are coming back, so neither are
+        // the links pointing at them.
+        await retireSharing(db, row.id)
         await audit(db, me.id, "box.destroyed", row.hostname)
         return json(c, 200, { ok: true })
       }),

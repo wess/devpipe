@@ -335,6 +335,8 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   const [destroying, setDestroying] = useState<api.Box | null>(null)
   /** The terminal a share link is being made for. */
   const [sharing, setSharing] = useState<string | null>(null)
+  /** The box about to be put down. */
+  const [sleeping, setSleeping] = useState<api.Box | null>(null)
   const [busy, setBusy] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // The box a terminal will be drawn into, measured before one exists: the
@@ -474,6 +476,19 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
     setBusy(false)
   }
 
+  const sleepBox = async (target: api.Box) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.sleepBox(target.id)
+      setSleeping(null)
+      await refreshBoxes()
+    } catch (e: any) {
+      setError(String(e.message))
+    }
+    setBusy(false)
+  }
+
   const destroyBox = async (target: api.Box) => {
     setBusy(true)
     try {
@@ -539,6 +554,20 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
                   which destroys the droplet without telling Devpipe, leaving a
                   row that still claims to be ready and a subscription still
                   held against it. */}
+              {/* Beside destroy, and deliberately first: it is the reversible
+                  one, and until now the only way to stop paying for a machine
+                  before its idle window ran out was the one that is not. */}
+              {b.status === "ready" && b.workspace_id !== null && (
+                <button
+                  type="button"
+                  className="icon dim"
+                  title={`Put ${b.name} to sleep`}
+                  aria-label={`Put ${b.name} to sleep`}
+                  onClick={() => setSleeping(b)}
+                >
+                  <Moon size={13} />
+                </button>
+              )}
               <button
                 type="button"
                 className="icon dim"
@@ -726,6 +755,16 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
         />
       )}
 
+      {sleeping && (
+        <SleepBox
+          box={sleeping}
+          terminals={sleeping.id === activeBox ? sessions.length : 0}
+          busy={busy}
+          onCancel={() => setSleeping(null)}
+          onConfirm={sleepBox}
+        />
+      )}
+
       {destroying && (
         <DestroyBox box={destroying} busy={busy} onCancel={() => setDestroying(null)} onConfirm={destroyBox} />
       )}
@@ -742,6 +781,77 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           onClose={() => setSharing(null)}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * Confirming that a box should be put down.
+ *
+ * Lighter than the destroy dialog on purpose — no name to type — because this
+ * is the reversible one and a confirmation heavy enough to be annoying pushes
+ * people towards the button that is not. What it does say is the part that is
+ * not obvious: the machine goes, the files stay, and coming back takes a few
+ * minutes rather than being instant.
+ */
+const SleepBox: React.FC<{
+  box: api.Box
+  terminals: number
+  busy: boolean
+  onCancel: () => void
+  onConfirm: (box: api.Box) => void
+}> = ({ box, terminals, busy, onCancel, onConfirm }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onCancel])
+
+  return (
+    <div className="modal-backdrop">
+      <button type="button" className="modal-scrim" aria-label="Cancel" onClick={onCancel} />
+      <dialog className="modal narrow" open aria-label={`Put ${box.name} to sleep`}>
+        <header>
+          <div>
+            <h2>Put {box.name} to sleep</h2>
+            <p className="muted">{box.hostname}</p>
+          </div>
+          <button type="button" className="icon" onClick={onCancel} aria-label="Cancel">
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="wizard-body">
+          <p className="note">
+            The machine is given back and stops being charged for by the hour. Your files stay on the workspace, and
+            waking brings the box back with the same name and the same tools. It takes about three minutes.
+          </p>
+          {/* The part people actually lose. An agent working through a task is
+              a process on that machine, and the machine is what goes. */}
+          {terminals > 0 && (
+            <p className="note warn">
+              {terminals} terminal{terminals === 1 ? "" : "s"} {terminals === 1 ? "is" : "are"} open on it. Anything
+              running in {terminals === 1 ? "it" : "them"} — an agent mid-task included — ends here.
+            </p>
+          )}
+          <p className="muted small">
+            Links you have made to its terminals stop working, because the sessions they point at will not survive the
+            machine. Published ports keep working once it is back.
+          </p>
+        </div>
+
+        <footer>
+          <button type="button" className="ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <span className="grow" />
+          <button type="button" disabled={busy} onClick={() => onConfirm(box)}>
+            {busy ? "Sleeping…" : "Put it to sleep"}
+          </button>
+        </footer>
+      </dialog>
     </div>
   )
 }
