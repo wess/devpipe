@@ -200,4 +200,4 @@ sleep 3
 echo "services: $(systemctl is-active devpipe-api devpipe-web caddy | tr '\n' ' ')"
 EOF
 
-echo "==> https://devpipe.com  ·  app at /terminals"
+echo "==> https://devpipe.com  ·  app at /runs"
