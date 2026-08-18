@@ -1,6 +1,5 @@
 import {
   Activity,
-  ChevronLeft,
   CircleDot,
   CreditCard,
   KeyRound,
@@ -11,6 +10,7 @@ import {
   Plus,
   Server,
   Settings as SettingsIcon,
+  Share2,
   Shield,
   Terminal as TerminalIcon,
   Trash2,
@@ -25,12 +25,15 @@ import { applyTheme, getTheme } from "./asylum/theme.ts"
 import { Admin } from "./components/Admin.tsx"
 import { BoxSetup } from "./components/BoxSetup.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
+import { Previews } from "./components/Previews.tsx"
 import { Runs } from "./components/Runs.tsx"
 import { Settings } from "./components/Settings.tsx"
+import { ShareTerminal } from "./components/ShareTerminal.tsx"
 import { TerminalView } from "./components/TerminalView.tsx"
 import { Vault } from "./components/Vault.tsx"
+import { Watch } from "./components/Watch.tsx"
 import { Wizard } from "./components/Wizard.tsx"
-import { href, type Route, useRoute, WORKSPACE_PATH } from "./routes.ts"
+import { HOME_PATH, href, type Route, useRoute } from "./routes.ts"
 import { gridFor } from "./terminal/metrics.ts"
 import { loadVt } from "./terminal/vt.ts"
 
@@ -275,10 +278,10 @@ const Reset: React.FC<{ token: string; onDone: (notice: string) => void }> = ({ 
       await api.resetPassword(token, password)
       api.setSession(null, null)
       // A reset link left in history is a link somebody else can find. It goes
-      // to the workspace path rather than to "/", which is the lander — a
-      // reload here should land on the sign-in form the user is about to need,
-      // not on the page that sells them the product they just fixed.
-      history.replaceState({}, "", WORKSPACE_PATH)
+      // to the app rather than to "/", which is the lander — a reload here
+      // should land on the sign-in form the user is about to need, not on the
+      // page that sells them the product they just fixed.
+      history.replaceState({}, "", HOME_PATH)
       onDone("Password changed. Sign in with the new one.")
     } catch (err: any) {
       // These messages are already written for a person to read, and a short
@@ -330,6 +333,8 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   const [wizard, setWizard] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [destroying, setDestroying] = useState<api.Box | null>(null)
+  /** The terminal a share link is being made for. */
+  const [sharing, setSharing] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // The box a terminal will be drawn into, measured before one exists: the
@@ -583,6 +588,8 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           ))}
         </div>
 
+        {box?.status === "ready" && <Previews boxId={box.id} ready={true} />}
+
         {box?.status === "ready" && (
           <div className="sidebar-foot">
             <button type="button" className="linkish" onClick={() => newTerminal([])}>
@@ -609,6 +616,19 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           </button>
           <span className="muted small">{box ? `${box.name} · ${box.hostname}` : "No box selected"}</span>
           <span className="grow" />
+          {/* On the terminal rather than on the box: what you hand somebody is
+              one session, not the machine it happens to be running on. */}
+          {box?.status === "ready" && activeSession && (
+            <button
+              type="button"
+              className="icon dim"
+              title="Share this terminal"
+              aria-label="Share this terminal"
+              onClick={() => setSharing(activeSession)}
+            >
+              <Share2 size={15} />
+            </button>
+          )}
           <span className="muted small">{status}</span>
         </div>
 
@@ -708,6 +728,19 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
 
       {destroying && (
         <DestroyBox box={destroying} busy={busy} onCancel={() => setDestroying(null)} onConfirm={destroyBox} />
+      )}
+
+      {sharing && box && (
+        <ShareTerminal
+          boxId={box.id}
+          sessionId={sharing}
+          title={
+            sessions.find(s => s.id === sharing)?.title ||
+            commandOf(sessions.find(s => s.id === sharing)?.argv ?? []) ||
+            sharing
+          }
+          onClose={() => setSharing(null)}
+        />
       )}
     </div>
   )
@@ -943,6 +976,69 @@ const Billing: React.FC = () => {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The half-second between clicking a private preview and seeing it.
+ *
+ * A preview is a separate origin, which is the point — it serves somebody's
+ * half-written application and must not be able to touch this one. That also
+ * means it cannot read the session this app holds, so this screen is the
+ * handover: ask the API where the preview lives, hand that origin a cookie
+ * using the session, and go.
+ *
+ * `to` comes back from the preview itself and is checked before it is used.
+ * Anything not starting with a single slash is dropped — a redirect target
+ * taken from a URL is an open redirect unless somebody says otherwise.
+ */
+const PreviewGate: React.FC<{ slug: string }> = ({ slug }) => {
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const asked = new URLSearchParams(location.search).get("to") ?? "/"
+    const to = asked.startsWith("/") && !asked.startsWith("//") ? asked : "/"
+    ;(async () => {
+      try {
+        const { url } = await api.previewOrigin(slug)
+        await api.grantPreview(url)
+        if (!cancelled) location.replace(`${url}${to}`)
+      } catch (err: any) {
+        if (!cancelled) setError(String(err?.message ?? err))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [slug])
+
+  return (
+    <div className="gate">
+      <div className="gate-card">
+        <div className="brand">
+          <TerminalIcon size={18} />
+          <span>Devpipe</span>
+        </div>
+        {error ? (
+          <>
+            <p className="note bad">{error}</p>
+            <button type="button" onClick={() => leave(HOME_PATH)}>
+              Back to your runs
+            </button>
+          </>
+        ) : (
+          <p className="muted">
+            <Loader2 className="spin" size={14} /> Opening that preview…
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** A plain navigation, for the one screen that has no router around it. */
+const leave = (path: string) => {
+  location.href = path
+}
+
 const App: React.FC = () => {
   const [signedIn, setSignedIn] = useState(api.isSignedIn())
   const [route, go] = useRoute()
@@ -967,6 +1063,10 @@ const App: React.FC = () => {
     // path when the real answer was a cached emulator that no longer had the
     // exports this build needs. The rest of the app still works without it;
     // only terminals do not.
+    // Not on a shared terminal: that screen loads the emulator itself, and
+    // both doing it means the same 350KB fetched twice on the one view that is
+    // most often opened on somebody's phone.
+    if (route.view === "watch") return
     loadVt()
       .then(() => setReady(true))
       .catch(err => {
@@ -974,7 +1074,7 @@ const App: React.FC = () => {
         setVtError(String(err?.message ?? err))
         setReady(true)
       })
-  }, [])
+  }, [route.view])
 
   useEffect(() => {
     if (!signedIn) return
@@ -994,6 +1094,11 @@ const App: React.FC = () => {
     if (location.pathname !== canonical) history.replaceState({}, "", canonical)
   }, [route, resetToken])
 
+  // Ahead of everything, session check included: a shared terminal is opened
+  // by somebody who does not have an account here and is not about to make one
+  // to look at a link they were sent.
+  if (route.view === "watch" && route.slug) return <Watch token={route.slug} />
+
   // Ahead of the session check: a reset link is most often clicked by someone
   // who is signed in somewhere else, and the reset ends that session anyway.
   if (resetToken) {
@@ -1009,6 +1114,7 @@ const App: React.FC = () => {
     )
   }
   if (!signedIn) return <Gate notice={notice} onDone={() => setSignedIn(true)} />
+  if (route.view === "preview" && route.slug) return <PreviewGate slug={route.slug} />
   if (!ready) {
     return (
       <div className="gate">
@@ -1022,22 +1128,25 @@ const App: React.FC = () => {
   return (
     <div className="app">
       <nav className="topbar">
-        <button type="button" className="brand" onClick={to("workspace")}>
-          <TerminalIcon size={16} />
+        <button type="button" className="brand" onClick={to("runs")}>
+          <Activity size={16} />
           <span>Devpipe</span>
         </button>
         <span className="grow" />
-        {/* First, and named for what it is. The terminals are still one click
-            away and always will be — they are just no longer the only thing
-            this product knows how to show you. */}
+        {/* The order is the argument. Runs is the app; the machine — its
+            terminals, its ports, its build log — is where you go when a run
+            needs a person, which is why it reads as a place rather than as
+            the way back. */}
         <button type="button" className={`ghost small ${route.view === "runs" ? "on" : ""}`} onClick={to("runs")}>
           <Activity size={14} /> Runs
         </button>
-        {route.view !== "workspace" && (
-          <button type="button" className="ghost small" onClick={to("workspace")}>
-            <ChevronLeft size={14} /> Terminals
-          </button>
-        )}
+        <button
+          type="button"
+          className={`ghost small ${route.view === "workspace" ? "on" : ""}`}
+          onClick={to("workspace")}
+        >
+          <TerminalIcon size={14} /> Machine
+        </button>
         {user?.is_owner && (
           <button type="button" className={`ghost small ${route.view === "admin" ? "on" : ""}`} onClick={to("admin")}>
             <Shield size={14} /> Admin
@@ -1064,9 +1173,9 @@ const App: React.FC = () => {
             await api.logout()
             setUser(null)
             setSignedIn(false)
-            // Back to the workspace path so the next sign-in does not land on
-            // the admin screen the previous account was looking at.
-            go({ view: "workspace", tab: "overview" }, { replace: true })
+            // Back to the home path so the next sign-in does not land on the
+            // admin screen the previous account was looking at.
+            go({ view: "runs", tab: "overview" }, { replace: true })
           }}
         >
           <LogOut size={14} />

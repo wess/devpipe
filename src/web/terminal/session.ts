@@ -24,12 +24,24 @@ export class Session {
   private generation = 0
   private pendingSize: { cols: number; rows: number } | null = null
 
+  /**
+   * `opts.endpoint` replaces the composed URL entirely, and `opts.readOnly`
+   * makes this a watcher.
+   *
+   * Both exist for shared sessions. A guest's socket does not go to the box —
+   * it terminates on the control plane, which holds the box's credential and
+   * copies frames, so the URL is a different shape and there is no token to
+   * put in it. Read-only is enforced there too; this half is so that a watcher
+   * does not type into a terminal and watch nothing happen, which reads as a
+   * hung session rather than as a permission.
+   */
   constructor(
     private url: string,
     private token: string,
     private sessionId: string,
     cols: number,
     rows: number,
+    private opts: { endpoint?: string; readOnly?: boolean } = {},
   ) {
     this.term = new Terminal(cols, rows)
   }
@@ -85,7 +97,8 @@ export class Session {
     // box, and the connection is TLS — but it does end up in the box's access
     // log, which is why it is not the account's credential.
     const socket = new WebSocket(
-      `${this.url}/v1/sessions/${encodeURIComponent(this.sessionId)}/attach?token=${encodeURIComponent(this.token)}`,
+      this.opts.endpoint ??
+        `${this.url}/v1/sessions/${encodeURIComponent(this.sessionId)}/attach?token=${encodeURIComponent(this.token)}`,
     )
     socket.binaryType = "arraybuffer"
     this.socket = socket
@@ -124,7 +137,15 @@ export class Session {
       if (msg.t === "hello") {
         this.attempt = 0
         this.setStatus("attached")
-        if (this.pendingSize) this.resize(this.pendingSize.cols, this.pendingSize.rows)
+        // A watcher takes the grid it is given. Sizing to the guest's own
+        // viewport instead would reflow bytes that were laid out for somebody
+        // else's terminal, which is not a smaller version of the session — it
+        // is a different one, with the wrap points in the wrong places.
+        if (this.opts.readOnly) {
+          if (msg.cols > 0 && msg.rows > 0) this.term?.resize(msg.cols, msg.rows)
+        } else if (this.pendingSize) {
+          this.resize(this.pendingSize.cols, this.pendingSize.rows)
+        }
       } else if (msg.t === "resync") {
         this.setStatus("caught up")
       } else if (msg.t === "exit") {
@@ -157,6 +178,7 @@ export class Session {
   }
 
   send(data: Uint8Array) {
+    if (this.opts.readOnly) return
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(data)
   }
 
@@ -208,6 +230,10 @@ export class Session {
   }
 
   resize(cols: number, rows: number) {
+    // A watcher never resizes anything. The pty belongs to whoever is working
+    // in it, and a second pair of eyes reflowing their editor mid-sentence is
+    // the one way a read-only share could still ruin somebody's afternoon.
+    if (this.opts.readOnly) return
     // Remembered rather than only sent: a reconnect has to re-assert the size
     // or the pty keeps whatever it was created with.
     this.pendingSize = { cols, rows }

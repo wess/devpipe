@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { planFor } from "../src/billing/plans.ts"
 import { CATALOG, fits, memoryFor, SIZES } from "../src/boxes/catalog.ts"
-import { ADMIN_TABS, href as routeHref, WORKSPACE_PATH } from "../src/web/routes.ts"
+import { ADMIN_TABS, HOME_PATH, href as routeHref, WORKSPACE_PATH } from "../src/web/routes.ts"
 import { db, truncateAll } from "./setup.ts"
 
 /**
@@ -33,6 +33,7 @@ const PAGES = ["index.html", ...LEGAL, ...ASYLUM]
  * that loads the workspace when it meant to load something else.
  */
 const APP_PATHS = new Set<string>([
+  HOME_PATH,
   WORKSPACE_PATH,
   routeHref({ view: "billing", tab: "overview" }),
   routeHref({ view: "settings", tab: "overview" }),
@@ -93,7 +94,10 @@ describe("the pages themselves", () => {
     // The only door. `/` is the lander, so without a link here the app is
     // reachable only by knowing the path to type — which was the state of
     // things, and reads as "the product does not exist yet".
-    expect(await read("index.html")).toContain(`href="${WORKSPACE_PATH}"`)
+    //
+    // It goes to the home path rather than to the terminals. Signing in should
+    // land on the work — the runs — and a terminal is one pane of one box.
+    expect(await read("index.html")).toContain(`href="${HOME_PATH}"`)
   })
 
   test("the lander's script is external", async () => {

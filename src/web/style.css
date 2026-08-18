@@ -43,6 +43,14 @@ button.linkish{background:none;border:0;color:var(--amber);padding:.25rem 0;text
 .sidebar-section{display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 .sidebar-section.grow{flex:1}
 .sidebar-head{display:flex;align-items:center;justify-content:space-between;padding:.7rem .85rem .35rem;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+/* Publishing a port. Lives in the sidebar beside the terminals, because it is
+   the same question about the same box: what of this machine can I see. */
+.port-form{display:flex;flex-direction:column;gap:.4rem;padding:.35rem .85rem .65rem}
+.port-form input{padding:.4rem .55rem;font-size:.8rem}
+.port-check{display:flex;align-items:center;gap:.45rem;color:var(--dim);font-size:.75rem}
+.port-check input{width:auto;flex:0 0 auto}
+.port-error{margin:0;padding:.1rem .85rem .5rem;color:var(--ember);font-size:.75rem}
+a.row-main{text-decoration:none}
 .sidebar-foot{border-top:1px solid var(--line);padding:.6rem .85rem;display:flex;flex-direction:column;gap:.15rem}
 .row{display:flex;align-items:center;gap:.5rem;width:100%;background:none;border:0;color:var(--text);padding:.45rem .85rem;text-align:left}
 .row:hover{background:rgba(255,255,255,.03)}

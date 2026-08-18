@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Devpipe — your agents keep working after you disconnect</title>
-<meta name="description" content="A persistent Linux box for your coding agents, with a terminal that lives on your iPad. Disconnect whenever. The work doesn't stop.">
+<meta name="description" content="Give a task to several coding agents at once, each on its own branch, on a machine that keeps working after you close the laptop.">
 <meta name="theme-color" content="#0B0E14">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
 
@@ -167,7 +167,7 @@ h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: bl
 }
 .lede strong { color: var(--amber); font-weight: 500; }
 
-/* ---- the terminal: the whole argument, performed --------------------- */
+/* ---- the run: the whole argument, performed -------------------------- */
 
 .stage {
   position: relative;
@@ -201,6 +201,22 @@ h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: bl
 .term-bar .sid { color: var(--text); }
 .term-bar .spacer { flex: 1; }
 .uptime { color: var(--amber); font-variant-numeric: tabular-nums; }
+/* A run is an agent, a branch, and a state. The bar carries all three,
+   because they are what tells two runs of the same task apart. */
+.term-bar .branch { color: var(--dim); }
+.term-bar .state {
+  display: inline-flex;
+  align-items: center;
+  gap: .38rem;
+  color: var(--amber);
+}
+.term-bar .state::before {
+  content: "";
+  width: .42rem; height: .42rem;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.6s steps(1) infinite;
+}
 
 .term-body {
   margin: 0;
@@ -508,32 +524,32 @@ footer {
 
   <main>
     <section class="hero">
-      <p class="eyebrow">Persistent shells for coding agents</p>
+      <p class="eyebrow">A machine that runs your coding agents</p>
       <h1>
         Close the lid.
         <span class="quiet">It keeps building.</span>
       </h1>
       <p class="lede">
-        Somewhere out there, a machine is still working on it. Put the iPad
-        down mid-task; <strong>nothing stops</strong>. Pick it up tomorrow and
-        the session is exactly where you left it.
+        Hand a task to an agent — or to three of them at once, each on its own
+        branch — and walk away. <strong>Nothing stops.</strong> Come back to
+        finished work and pick the one that won.
       </p>
 
       <div class="stage">
         <div class="term" id="term">
           <div class="term-bar">
-            <span class="sid">s1</span>
-            <span>claude</span>
+            <span class="sid">token refresh drops sessions</span>
+            <span class="branch">auth/token-skew</span>
             <span class="spacer"></span>
-            <span>uptime</span>
+            <span class="state">claude</span>
             <span class="uptime" id="uptime">00:00:00</span>
           </div>
           <pre class="term-body" id="body" aria-live="off"></pre>
         </div>
 
         <div class="away-card" id="away">
-          <div class="small">Client disconnected</div>
-          <div class="big">The session is still running · <span class="counter" id="awaySecs">0s</span></div>
+          <div class="small">You closed the tab</div>
+          <div class="big">The run is still going · <span class="counter" id="awaySecs">0s</span></div>
         </div>
 
         <p class="resumed" id="resumed"></p>
@@ -549,7 +565,7 @@ footer {
             <h3>A machine, not a container</h3>
             <p>
               Yours, with a name and a disk that stays written to. About three
-              minutes from claim to shell, toolchain already on it.
+              minutes from claim to first run, toolchain already on it.
             </p>
           </div>
         </li>
@@ -594,8 +610,10 @@ footer {
       </p>
 
       <p class="tease">
-        There is more here than a box with a shell on it. That part is easier to
-        show than to describe, and it is close.
+        And when the agent says it is done, you can look: a port on the box
+        opens in your own browser — privately, or as a link that expires — and
+        a terminal on it can be watched, or handed over, by someone who has no
+        account here at all.
       </p>
     </section>
 
@@ -631,7 +649,7 @@ footer {
       <!-- The only route from the lander into the app. Without it the app is
            reachable only by knowing the path to type, which is fine while the
            audience is one person and not once anybody has an account. -->
-      <a href="/terminals">Sign in</a>
+      <a href="/runs">Sign in</a>
       <a href="/asylum.html">Asylum</a>
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>

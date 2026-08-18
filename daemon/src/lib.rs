@@ -10,6 +10,7 @@
 //! the two apart means no escaping, no framing header, and no ambiguity about
 //! what a frame is.
 
+mod proxy;
 mod replay;
 mod session;
 pub mod tls;
@@ -22,7 +23,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{any, delete, get};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -136,6 +137,14 @@ pub fn router(token: String) -> Router {
         .route("/v1/sessions/{id}", delete(kill_session))
         .route("/v1/sessions/{id}/attach", get(attach))
         .route("/v1/forward", get(forward))
+        // A dev server on the box, reachable from a browser. Every method, not
+        // just GET: a preview that cannot POST is a preview of a page rather
+        // than of an application.
+        .route("/v1/proxy/{port}", any(proxy::proxy_root))
+        // Named separately because a wildcard matches at least one segment,
+        // and `/` is exactly what a browser asks for first.
+        .route("/v1/proxy/{port}/", any(proxy::proxy_root))
+        .route("/v1/proxy/{port}/{*rest}", any(proxy::proxy_path))
         .with_state(app)
 }
 
@@ -167,14 +176,14 @@ pub async fn serve_tls(
 }
 
 #[derive(Deserialize)]
-struct TokenQuery {
+pub(crate) struct TokenQuery {
     token: Option<String>,
 }
 
 /// Bearer header or `?token=`. The query form exists because it is the one
 /// thing every websocket client can do; the header is what the real client
 /// uses.
-fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
+pub(crate) fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
     if let Some(t) = q.token.as_deref()
         && t == app.token.as_str() {
             return true;

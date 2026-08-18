@@ -207,6 +207,92 @@ export const revokeSession = (id: number) => call("DELETE", `/sessions/${id}`)
 export const revokeOtherSessions = () => call("DELETE", "/sessions")
 
 export const catalog = () => call<Catalog>("GET", "/boxes/catalog")
+/**
+ * A port on a box, reachable in a browser without being on the internet.
+ *
+ * `url` is a hostname of its own rather than a path on this one: a dev server's
+ * own absolute paths — `/assets/…`, `/@vite/client` — have to resolve, and they
+ * cannot under a prefix.
+ */
+export type Preview = {
+  id: number
+  box_id: number
+  port: number
+  label: string
+  audience: "private" | "link"
+  url: string
+  expires_at: string | null
+}
+
+export const listPreviews = (boxId: number) => call<Preview[]>("GET", `/boxes/${boxId}/previews`)
+
+export const createPreview = (
+  boxId: number,
+  input: { port: number; label?: string; audience?: "private" | "link"; hours?: number },
+) => call<Preview>("POST", `/boxes/${boxId}/previews`, input)
+
+export const revokePreview = (id: number) => call<{ ok: true }>("DELETE", `/previews/${id}`)
+
+/** Where a preview lives, so the app never turns a slug in a URL into a host. */
+export const previewOrigin = (slug: string) => call<{ url: string }>("GET", `/previews/${slug}/origin`)
+
+/**
+ * Hands the preview's own origin a cookie, using the session this app holds.
+ *
+ * Cross-origin and deliberately not through `call`: it goes to the preview
+ * hostname rather than to the API, and it is the one request here that needs
+ * `credentials` — the whole point is the `Set-Cookie` that comes back.
+ */
+export const grantPreview = async (origin: string): Promise<void> => {
+  const res = await fetch(`${origin}/__dp/grant`, {
+    method: "POST",
+    credentials: "include",
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new ApiError((data as any)?.error ?? `That preview did not open (${res.status})`, res.status)
+  }
+}
+
+/**
+ * A terminal somebody else can open.
+ *
+ * `url` comes back exactly once, on the response that creates it: the row holds
+ * a hash of the token, so there is nothing to show a second time. That is the
+ * point — a link this API cannot re-read is a link that cannot leak from it.
+ */
+export type Share = {
+  id: number
+  box_id: number
+  session_id: string
+  mode: "watch" | "control"
+  label: string
+  expires_at: string | null
+  visits: number
+  url: string | null
+}
+
+export const listShares = (boxId: number) => call<Share[]>("GET", `/boxes/${boxId}/shares`)
+
+export const createShare = (
+  boxId: number,
+  input: { session_id: string; mode?: "watch" | "control"; label?: string; hours?: number },
+) => call<Share>("POST", `/boxes/${boxId}/shares`, input)
+
+export const revokeShare = (id: number) => call<{ ok: true }>("DELETE", `/shares/${id}`)
+
+/** What a guest is about to open. No session needed — the token is the one. */
+export const describeShare = (token: string) =>
+  call<{ mode: "watch" | "control"; label: string; expires_at: string | null }>(
+    "GET",
+    `/shares/${encodeURIComponent(token)}`,
+  )
+
+/** Where a guest's terminal socket goes. Never to the box. */
+export const shareSocketUrl = (token: string) =>
+  `${location.origin.replace(/^http/, "ws")}/api/shares/${encodeURIComponent(token)}/socket`
+
 export const listBoxes = () => call<Box[]>("GET", "/boxes")
 export const createBox = (input: {
   name: string

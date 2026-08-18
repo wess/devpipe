@@ -13,7 +13,7 @@
   // A plausible run, not a highlight reel. The point of the demo is that it
   // is unremarkable work continuing, not a dramatic finale.
   var script = [
-    { t: 'dim',  s: '$ claude' },
+    { t: 'dim',  s: 'worktree ../auth-token-skew · branch auth/token-skew' },
     { t: '',     s: 'Reading src/auth/session.rs' },
     { t: '',     s: 'Reading src/auth/token.rs' },
     { t: 'amb',  s: '· refactoring token refresh' },
@@ -78,7 +78,7 @@
     for (var i = 0; i < MAX_LINES; i++) addLine();
     moveCaret();
     tickUptime();
-    resumed.textContent = 'Sessions keep running while you are disconnected.';
+    resumed.textContent = 'Runs keep going while you are disconnected.';
     resumed.classList.add('show');
     return;
   }

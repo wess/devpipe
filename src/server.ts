@@ -10,6 +10,8 @@ import { billingRoutes } from "./billing/index.ts"
 import { companionRoutes } from "./boxes/companion.ts"
 import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
 import { expireDormant, reclaimIdle } from "./boxes/reclaim.ts"
+import { previewHost, previewRoutes } from "./previews/index.ts"
+import { shareRoutes, shareSocket } from "./shares/index.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
 import { claimRoutes } from "./claims/index.ts"
 import { createEmailer } from "./email/index.ts"
@@ -132,6 +134,8 @@ const baseFetch = router(
   ...billingRoutes(db, config.appUrl),
   ...terminalRoutes(db),
   ...companionRoutes(db),
+  ...previewRoutes(db),
+  ...shareRoutes(db, config.appUrl),
   ...adminRoutes(db),
   ...claimRoutes(db),
   ...broadcastRoutes(db, emailer, config.appUrl),
@@ -140,10 +144,56 @@ const baseFetch = router(
 
 const headers = Object.entries(securityHeaders(config.boxDomain))
 
+/**
+ * Preview hostnames, answered before anything else and without this instance's
+ * headers on the way out.
+ *
+ * Both halves of that are deliberate. Before the router, because a preview is
+ * not an API route — the path belongs to whatever is running on somebody's box,
+ * `/api/anything` included. Without the headers, because they describe *this*
+ * application: the CSP alone forbids inline scripts, which is most of what a
+ * dev server serves, and it would arrive as a blank page with a console full of
+ * violations for code that is perfectly correct.
+ */
+const preview = previewHost(db, config.appUrl)
+const shared = shareSocket(db)
+
+/**
+ * One websocket this process is in the middle of.
+ *
+ * Two things need it, for the same reason: neither end may hold the box's
+ * credential. A preview carries a dev server's live-reload channel, without
+ * which a page loads correctly once and then silently stops reflecting the
+ * code. A share carries somebody else's terminal, where this hop is the only
+ * place `watch` can be told from `control` — the daemon has one credential and
+ * it is all-powerful.
+ */
+type Bridged = {
+  url: string
+  protocol: string | null
+  upstream: WebSocket | null
+  /** Frames that arrived before the box's side finished connecting. */
+  queue: (string | ArrayBufferLike)[]
+  /** Drop everything travelling towards the box. */
+  readOnly: boolean
+}
+
 // The web tier proxies /api/* through to here, so strip the prefix once at the
 // edge rather than repeating it in every route pattern.
-const fetch = async (req: Request): Promise<Response> => {
+const fetch = async (req: Request, server: any): Promise<Response | undefined> => {
   const url = new URL(req.url)
+
+  const socket = (await preview.socket(req)) ?? (await shared(req))
+  if (socket) {
+    const data: Bridged = { readOnly: false, ...socket, upstream: null, queue: [] }
+    // The subprotocol has to be echoed back or the browser drops the
+    // connection as a failed negotiation — Vite asks for `vite-hmr`.
+    const headers = socket.protocol ? { "sec-websocket-protocol": socket.protocol } : undefined
+    if (server.upgrade(req, { data, headers })) return undefined
+  }
+  const previewed = await preview.handle(req)
+  if (previewed) return previewed
+
   let res: Response
   if (url.pathname.startsWith("/api/")) {
     url.pathname = url.pathname.slice(4)
@@ -159,6 +209,63 @@ const server = Bun.serve({
   port: config.port,
   hostname: config.host,
   fetch,
+  websocket: {
+    open(ws: any) {
+      const data = ws.data as Bridged
+      const protocols = data.protocol
+        ? data.protocol.split(",").map(part => part.trim()).filter(Boolean)
+        : undefined
+      let upstream: WebSocket
+      try {
+        upstream = protocols ? new WebSocket(data.url, protocols) : new WebSocket(data.url)
+      } catch {
+        ws.close(1011, "That box is not answering.")
+        return
+      }
+      upstream.binaryType = "arraybuffer"
+      data.upstream = upstream
+      upstream.onopen = () => {
+        for (const frame of data.queue) upstream.send(frame as any)
+        data.queue.length = 0
+      }
+      upstream.onmessage = event => {
+        try {
+          ws.send(event.data)
+        } catch {
+          // The browser went away mid-frame; the close handler tidies up.
+        }
+      }
+      upstream.onclose = () => {
+        try {
+          ws.close()
+        } catch {}
+      }
+      upstream.onerror = () => {
+        try {
+          ws.close(1011, "That box is not answering.")
+        } catch {}
+      }
+    },
+    message(ws: any, message: string | Buffer) {
+      const data = ws.data as Bridged
+      // A watcher's keystrokes and resizes stop here. The client also declines
+      // to send them, which is what keeps a read-only terminal from feeling
+      // broken — but that is a courtesy, and this is the rule.
+      if (data.readOnly) return
+      const frame = typeof message === "string" ? message : new Uint8Array(message).buffer
+      // Queued rather than dropped: a client that speaks first — which is most
+      // of them — would otherwise lose its opening frame to a race with a
+      // connection that is still being made.
+      if (data.upstream?.readyState === 1) data.upstream.send(frame as any)
+      else data.queue.push(frame)
+    },
+    close(ws: any) {
+      const data = ws.data as Bridged
+      try {
+        data.upstream?.close()
+      } catch {}
+    },
+  },
   // Terminal websockets connect straight to a box, so nothing here is
   // long-lived; a request that has moved no bytes for two minutes is stuck.
   idleTimeout: 120,

@@ -7,6 +7,18 @@
 
 {
 	email wess@devpipe.com
+
+	# Previews get a certificate the moment somebody asks for one, rather than
+	# a wildcard nobody can issue. See the block at the bottom of this file.
+	#
+	# The `ask` is not optional and not a nicety: without it, anyone who points
+	# a hostname at this address makes this server fetch a certificate on their
+	# behalf, and enough of those gets the account rate-limited by Let's Encrypt
+	# for names it has never heard of. The API answers 200 only for a preview
+	# that exists and has not been revoked.
+	on_demand_tls {
+		ask http://127.0.0.1:3000/previews/allow
+	}
 }
 
 devpipe.com, www.devpipe.com {
@@ -90,3 +102,37 @@ devpipe.com, www.devpipe.com {
 # The wildcard A record still points here, which is what we want: each user's
 # box will get its own subdomain and its own HTTP-01 certificate when it is
 # provisioned, and that record is the fallback until it is.
+
+# Previews: `p-<random>.devpipe.com`, one hostname per port somebody is looking
+# at on a box.
+#
+# A catch-all rather than a named site, because the names are created at
+# runtime and there is no list to write down here. On-demand TLS is what makes
+# that safe to say — each name gets its own HTTP-01 certificate the first time
+# it is asked for, and only if the API recognises it, so this block cannot be
+# used to make this server fetch certificates for hostnames that are not ours.
+#
+# Straight to the API rather than through the web tier. Two reasons: a preview
+# is not the app and must not inherit its Content-Security-Policy, which
+# forbids the inline scripts most dev servers serve; and the web tier proxies
+# with `fetch`, which cannot carry a websocket — so live reload would be the
+# one thing that silently did not work.
+#
+# The named blocks above win for the hostnames they name, so this only ever
+# sees what nothing else claimed.
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		# A dev server's socket is as long-lived as a terminal's, and a first
+		# request can sit for a minute while the application compiles.
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+	log {
+		format json
+	}
+}

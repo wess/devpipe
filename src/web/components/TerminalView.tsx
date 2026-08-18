@@ -42,7 +42,23 @@ export const TerminalView: React.FC<{
   onStatus?: (s: string) => void
   /** The grid actually in use, whenever it changes. */
   onResize?: (cols: number, rows: number) => void
-}> = ({ url, token, sessionId, fontSize = DEFAULT_FONT_SIZE, onStatus, onResize }) => {
+  /**
+   * A socket URL to use verbatim, for a session reached through the control
+   * plane rather than on the box — which is how a shared session is watched.
+   */
+  endpoint?: string
+  /** Watching somebody else's terminal: no input, no resize, no key bar. */
+  readOnly?: boolean
+}> = ({
+  url,
+  token,
+  sessionId,
+  fontSize = DEFAULT_FONT_SIZE,
+  onStatus,
+  onResize,
+  endpoint,
+  readOnly = false,
+}) => {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -127,7 +143,7 @@ export const TerminalView: React.FC<{
     // never briefly exists at a width nothing on screen has.
     const first = wrap.getBoundingClientRect()
     const start = gridFor(first.width, first.height, fontSize)
-    const session = new Session(url, token, sessionId, start.cols, start.rows)
+    const session = new Session(url, token, sessionId, start.cols, start.rows, { endpoint, readOnly })
     sessionRef.current = session
     const renderer = new Renderer(canvas, () => session.term, fontSize)
     rendererRef.current = renderer
@@ -401,7 +417,7 @@ export const TerminalView: React.FC<{
     // `coarse` is settled once at mount and never changes, so listing it costs
     // nothing — but leaving it out is the kind of omission that is correct
     // today and quietly wrong the moment somebody makes it stateful.
-  }, [url, token, sessionId, fontSize, coarse])
+  }, [url, token, sessionId, fontSize, coarse, endpoint, readOnly])
 
   // What the software keyboard is covering.
   //
@@ -616,7 +632,7 @@ export const TerminalView: React.FC<{
         onKeyDown={onKeyDown}
         onPaste={onPaste}
       />
-      {coarse && (
+      {coarse && !readOnly && (
         <KeyBar
           ctrl={latch.ctrl}
           alt={latch.alt}

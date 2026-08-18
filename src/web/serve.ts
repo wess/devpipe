@@ -122,13 +122,39 @@ const NO_CACHE = "no-cache"
  */
 const climbs = (path: string) => path.includes("..") || /%2e/i.test(path) || path.includes("\0")
 
+/** One websocket on its way to the API, and the socket carrying it there. */
+type Relayed = {
+  url: string
+  protocol: string | null
+  upstream: WebSocket | null
+  queue: (string | ArrayBufferLike)[]
+}
+
 const server = Bun.serve({
   port: PORT,
   hostname: HOST,
   idleTimeout: 120,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url)
     const path = url.pathname
+
+    // Websockets to the API, which `fetch` cannot carry.
+    //
+    // Everything else on /api/ is proxied by re-issuing the request, and an
+    // upgrade is the one thing that cannot survive that: `fetch` returns a
+    // response rather than a connection. A shared terminal is watched over one
+    // of these, so without this the link opens a page that connects to nothing.
+    if (path.startsWith("/api/") && (req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
+      const target = new URL(path + url.search, API)
+      target.protocol = target.protocol === "https:" ? "wss:" : "ws:"
+      const protocol = req.headers.get("sec-websocket-protocol")
+      const data: Relayed = { url: target.href, protocol, upstream: null, queue: [] }
+      const headers = protocol ? { "sec-websocket-protocol": protocol } : undefined
+      // Cast because the handlers below take `any`: Bun infers the socket's
+      // data type from them, and inferring `undefined` makes every upgrade a
+      // type error rather than a missing one.
+      if ((server as any).upgrade(req, { data, headers })) return undefined
+    }
 
     if (climbs(path)) {
       return new Response("Not found", { status: 404, headers: security({ "content-type": "text/plain" }) })
@@ -255,6 +281,55 @@ const server = Bun.serve({
     return new Response(indexHtml, {
       headers: security({ "content-type": "text/html; charset=utf-8", "cache-control": NO_CACHE }),
     })
+  },
+  websocket: {
+    open(ws: any) {
+      const data = ws.data as Relayed
+      const protocols = data.protocol
+        ? data.protocol.split(",").map(part => part.trim()).filter(Boolean)
+        : undefined
+      let upstream: WebSocket
+      try {
+        upstream = protocols ? new WebSocket(data.url, protocols) : new WebSocket(data.url)
+      } catch {
+        ws.close(1011, "The API is not answering.")
+        return
+      }
+      upstream.binaryType = "arraybuffer"
+      data.upstream = upstream
+      upstream.onopen = () => {
+        for (const frame of data.queue) upstream.send(frame as any)
+        data.queue.length = 0
+      }
+      upstream.onmessage = event => {
+        try {
+          ws.send(event.data)
+        } catch {
+          // The browser left mid-frame; close() tidies up.
+        }
+      }
+      upstream.onclose = () => {
+        try {
+          ws.close()
+        } catch {}
+      }
+      upstream.onerror = () => {
+        try {
+          ws.close(1011, "The API is not answering.")
+        } catch {}
+      }
+    },
+    message(ws: any, message: string | Buffer) {
+      const data = ws.data as Relayed
+      const frame = typeof message === "string" ? message : new Uint8Array(message).buffer
+      if (data.upstream?.readyState === 1) data.upstream.send(frame as any)
+      else data.queue.push(frame)
+    },
+    close(ws: any) {
+      try {
+        ;(ws.data as Relayed).upstream?.close()
+      } catch {}
+    },
   },
 })
 
