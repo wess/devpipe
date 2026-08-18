@@ -7,6 +7,7 @@ import { authRoutes } from "./auth/index.ts"
 import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
 import { billingRoutes } from "./billing/index.ts"
+import { companionRoutes } from "./boxes/companion.ts"
 import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
 import { expireDormant, reclaimIdle } from "./boxes/reclaim.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
@@ -130,6 +131,7 @@ const baseFetch = router(
   ...boxVaultRoutes(db),
   ...billingRoutes(db, config.appUrl),
   ...terminalRoutes(db),
+  ...companionRoutes(db),
   ...adminRoutes(db),
   ...claimRoutes(db),
   ...broadcastRoutes(db, emailer, config.appUrl),

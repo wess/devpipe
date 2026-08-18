@@ -135,6 +135,9 @@ const server = Bun.serve({
     }
 
     // The API is a separate process; the browser only ever talks to this one.
+    // Asylum's companion goes through it too, as `/api/boxes/:id/companion/*`
+    // — one session, one place that holds a box's credential, and nothing here
+    // that has to know a companion exists.
     if (path.startsWith("/api/")) {
       const target = new URL(path + url.search, API)
       try {

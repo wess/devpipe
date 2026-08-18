@@ -35,6 +35,11 @@ void dp_term_free(DpTerm *t);
 void dp_term_feed(DpTerm *t, const uint8_t *bytes, size_t len);
 void dp_term_resize(DpTerm *t, uint32_t cols, uint32_t rows);
 
+// Wipe every scrap of state, same size, *same pointer*. Freeing and
+// reallocating instead is a use-after-free the moment a renderer is still
+// holding the last snapshot.
+void dp_term_reset(DpTerm *t);
+
 // Returns cols*rows cells, row-major. Valid until the next snapshot or free.
 const DpCell *dp_term_snapshot(DpTerm *t, DpScreen *out);
 
@@ -112,5 +117,61 @@ uint32_t dp_term_selection_span(DpTerm *t, intptr_t *out);
 // difference between pasting a command back and pasting one with a line break
 // through the middle of it.
 const char *dp_term_selection_text(DpTerm *t);
+
+// ---- events ----------------------------------------------------------------
+//
+// All drained: asking clears. Gathered behind one call because a client asks on
+// every pump, and five FFI round trips to be told "no" five times is four more
+// than the answer is worth.
+
+#define DP_EVENT_BELL         (1u << 0)
+#define DP_EVENT_TITLE        (1u << 1)
+#define DP_EVENT_CWD          (1u << 2)
+#define DP_EVENT_CLIPBOARD    (1u << 3)
+#define DP_EVENT_NOTIFICATION (1u << 4)
+#define DP_EVENT_COMMAND_DONE (1u << 5)
+
+// What happened since the last call. Payloads are parked on the terminal for
+// the follow-up reads the bits say are worth making, and stay valid until the
+// next drain.
+//
+// The notification bit is the one that matters on a tablet: an agent that wants
+// permission raises OSC 9/777/99, and the whole premise of leaving one running
+// on a box is that it can reach you when it gets stuck.
+uint32_t dp_term_take_events(DpTerm *t);
+
+const char *dp_term_cwd(DpTerm *t);
+const char *dp_term_clipboard(DpTerm *t);            // last OSC 52 write
+const char *dp_term_notification_title(DpTerm *t);
+const char *dp_term_notification_body(DpTerm *t);
+
+// The program has asked for its update to land atomically (?2026). Presenting
+// mid-bracket is the difference between a redraw and a flicker.
+uint8_t dp_term_synchronized_output(DpTerm *t);
+
+// Tell the program focus changed (?1004), if it asked to be told.
+void dp_term_report_focus(DpTerm *t, uint8_t focused);
+
+// Land the viewport on an exact offset. `dp_term_scroll` takes a delta, which
+// is what a finger does; search wants a known line, and deriving a delta to get
+// there races output arriving between the read and the write.
+void dp_term_set_display_offset(DpTerm *t, size_t offset);
+
+// ---- search ----------------------------------------------------------------
+
+// Global line space: 0..scrollback_len-1 is history, scrollback_len.. is the
+// live screen. Columns inclusive.
+typedef struct {
+  uint32_t line;
+  uint32_t start_col;
+  uint32_t end_col;
+  uint32_t _pad;
+} DpMatch;
+
+// Returns the TOTAL number of matches, which may exceed `cap` — only the first
+// `cap` are written, so a caller can size a buffer from the answer or simply
+// cap what it is willing to highlight.
+int32_t dp_term_search(DpTerm *t, const char *needle, uint8_t case_sensitive,
+                       DpMatch *out, size_t cap);
 
 #endif

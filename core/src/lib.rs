@@ -25,6 +25,16 @@ pub struct DpTerm {
     link: Vec<u8>,
     /// Reused by `dp_term_selection_text`, on the same terms as `link`.
     sel: Vec<u8>,
+    /// Same again for the one-shot side channels: OSC 52 clipboard writes, OSC
+    /// 7 working directory, and the OSC 9/777/99 notification a program raises
+    /// when it wants attention.
+    clip: Vec<u8>,
+    cwd: Vec<u8>,
+    note_title: Vec<u8>,
+    note_body: Vec<u8>,
+    /// The scrollback size the terminal was made with, so a reset can rebuild
+    /// an identical one in place.
+    scrollback: usize,
 }
 
 /// One cell, flattened for the renderer. 16 bytes, `Copy`, no pointers — the
@@ -94,8 +104,35 @@ pub extern "C" fn dp_term_new(cols: u32, rows: u32, scrollback: u32) -> *mut DpT
         title: Vec::new(),
         link: Vec::new(),
         sel: Vec::new(),
+        clip: Vec::new(),
+        cwd: Vec::new(),
+        note_title: Vec::new(),
+        note_body: Vec::new(),
+        scrollback: scrollback as usize,
     });
     Box::into_raw(t)
+}
+
+/// Throw away every scrap of state and start clean at the same size.
+///
+/// In place, and that is the whole point of it existing. Switching sessions
+/// used to mean freeing the handle and allocating another, which is fine right
+/// up until a renderer is holding the pointer from the last `dp_term_snapshot`
+/// — then it is a use-after-free that only shows up under load, on a device,
+/// as a crash with no useful stack. The box stays put; only what is inside it
+/// is replaced.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_reset(t: *mut DpTerm) {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return;
+    };
+    let (cols, rows) = (t.term.cols(), t.term.rows());
+    t.term = Terminal::new(cols, rows, t.scrollback);
+    t.cells.clear();
+    t.out.clear();
 }
 
 /// # Safety
@@ -491,6 +528,219 @@ pub unsafe extern "C" fn dp_term_scroll_to_bottom(t: *mut DpTerm) {
     t.term.set_display_offset(0);
 }
 
+/// Jump the viewport to an exact offset above the live bottom.
+///
+/// `dp_term_scroll` moves by a delta, which is what a finger does. Search
+/// wants to land on a known line instead, and computing a delta from the
+/// current offset to get there is the sort of arithmetic that is right until
+/// output arrives between the read and the write.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_set_display_offset(t: *mut DpTerm, offset: usize) {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return;
+    };
+    t.term.set_display_offset(offset);
+}
+
+// ---- one-shot events -------------------------------------------------------
+//
+// Everything here is drained: asking clears it. They are gathered behind a
+// single call because a client has to ask on every pump and five FFI calls to
+// be told "no" five times is four more than the answer is worth.
+
+/// Bits returned by `dp_term_take_events`.
+pub const DP_EVENT_BELL: u32 = 1 << 0;
+pub const DP_EVENT_TITLE: u32 = 1 << 1;
+pub const DP_EVENT_CWD: u32 = 1 << 2;
+pub const DP_EVENT_CLIPBOARD: u32 = 1 << 3;
+pub const DP_EVENT_NOTIFICATION: u32 = 1 << 4;
+pub const DP_EVENT_COMMAND_DONE: u32 = 1 << 5;
+
+/// What happened since the last call, as bits, with the payloads parked on the
+/// terminal for the follow-up reads that the bits say are worth making.
+///
+/// The notification bit is the interesting one on a tablet. A coding agent that
+/// wants permission raises OSC 9, and until now that went nowhere: the whole
+/// premise of leaving an agent running on a box is that it can reach you when
+/// it gets stuck, and the client it was most likely to be stuck in front of
+/// silently dropped the one message that says so.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_take_events(t: *mut DpTerm) -> u32 {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return 0;
+    };
+    let mut bits = 0;
+    if t.term.take_bell() {
+        bits |= DP_EVENT_BELL;
+    }
+    if t.term.take_title_changed().is_some() {
+        bits |= DP_EVENT_TITLE;
+    }
+    if let Some(cwd) = t.term.take_cwd_changed() {
+        t.cwd.clear();
+        t.cwd.extend_from_slice(cwd.as_bytes());
+        t.cwd.push(0);
+        bits |= DP_EVENT_CWD;
+    }
+    if let Some(clip) = t.term.take_clipboard() {
+        t.clip.clear();
+        t.clip.extend_from_slice(&clip.data);
+        t.clip.push(0);
+        bits |= DP_EVENT_CLIPBOARD;
+    }
+    if let Some(note) = t.term.take_notification() {
+        t.note_title.clear();
+        t.note_title
+            .extend_from_slice(note.title.unwrap_or_default().as_bytes());
+        t.note_title.push(0);
+        t.note_body.clear();
+        t.note_body.extend_from_slice(note.body.as_bytes());
+        t.note_body.push(0);
+        bits |= DP_EVENT_NOTIFICATION;
+    }
+    if t.term.take_command_finished().is_some() {
+        bits |= DP_EVENT_COMMAND_DONE;
+    }
+    bits
+}
+
+/// The working directory OSC 7 last reported, valid until the next event drain.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_cwd(t: *mut DpTerm) -> *const c_char {
+    unsafe { borrowed(t, |t| &t.cwd) }
+}
+
+/// The payload of the last OSC 52 clipboard write.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_clipboard(t: *mut DpTerm) -> *const c_char {
+    unsafe { borrowed(t, |t| &t.clip) }
+}
+
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_notification_title(t: *mut DpTerm) -> *const c_char {
+    unsafe { borrowed(t, |t| &t.note_title) }
+}
+
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_notification_body(t: *mut DpTerm) -> *const c_char {
+    unsafe { borrowed(t, |t| &t.note_body) }
+}
+
+/// Shared tail of the string getters: a NUL-terminated borrow of one of the
+/// terminal's scratch buffers, or null when it is empty.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+unsafe fn borrowed(t: *mut DpTerm, pick: fn(&DpTerm) -> &Vec<u8>) -> *const c_char {
+    let Some(t) = (unsafe { t.as_ref() }) else {
+        return std::ptr::null();
+    };
+    let buf = pick(t);
+    if buf.is_empty() {
+        return std::ptr::null();
+    }
+    buf.as_ptr() as *const c_char
+}
+
+/// Whether the program has asked for its update to land atomically (?2026).
+///
+/// A TUI that repaints in several writes brackets them, and a client that
+/// presents a frame in the middle of that shows the half-drawn state. It is the
+/// difference between a redraw and a flicker, and it is most visible in exactly
+/// the full-screen programs this product exists to run.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_synchronized_output(t: *mut DpTerm) -> u8 {
+    let Some(t) = (unsafe { t.as_ref() }) else {
+        return 0;
+    };
+    t.term.synchronized_output() as u8
+}
+
+/// Tell the program the window gained or lost focus (?1004), if it asked.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_report_focus(t: *mut DpTerm, focused: u8) {
+    if let Some(t) = unsafe { t.as_mut() } {
+        t.term.report_focus(focused != 0);
+    }
+}
+
+// ---- search ----------------------------------------------------------------
+
+/// One hit, in the global line space: `0..scrollback_len-1` is history and
+/// `scrollback_len..` is the live screen. Columns are inclusive.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DpMatch {
+    pub line: u32,
+    pub start_col: u32,
+    pub end_col: u32,
+    _pad: u32,
+}
+
+/// Find every occurrence of `needle` across scrollback and the live screen.
+///
+/// Returns the total number of matches, which may exceed `cap` — only the first
+/// `cap` are written, so a caller can size a buffer from the answer and ask
+/// again, or simply cap what it is willing to highlight.
+///
+/// # Safety
+/// `t` must come from `dp_term_new`; `needle` must be NUL-terminated; `out`
+/// must be writable for `cap` `DpMatch`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dp_term_search(
+    t: *mut DpTerm,
+    needle: *const c_char,
+    case_sensitive: u8,
+    out: *mut DpMatch,
+    cap: usize,
+) -> i32 {
+    let Some(t) = (unsafe { t.as_mut() }) else {
+        return 0;
+    };
+    if needle.is_null() {
+        return 0;
+    }
+    let Ok(needle) = (unsafe { std::ffi::CStr::from_ptr(needle) }).to_str() else {
+        return 0;
+    };
+    let hits = t.term.search(needle, case_sensitive != 0);
+    if !out.is_null() && cap > 0 {
+        let n = hits.len().min(cap);
+        let slots = unsafe { std::slice::from_raw_parts_mut(out, n) };
+        for (slot, hit) in slots.iter_mut().zip(&hits) {
+            *slot = DpMatch {
+                line: hit.line as u32,
+                start_col: hit.start_col as u32,
+                end_col: hit.end_col as u32,
+                _pad: 0,
+            };
+        }
+    }
+    hits.len() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,6 +919,169 @@ mod tests {
         let (s, cells) = snap(t);
         assert_eq!((s.cols, s.rows), (40, 12));
         assert_eq!(cells.len(), 40 * 12);
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn reset_clears_the_screen_without_moving_the_handle() {
+        let t = dp_term_new(20, 4, 100);
+        feed_lines(t, 10);
+        assert_eq!(unsafe { dp_term_scrollback_len(t) }, 7);
+
+        unsafe { dp_term_reset(t) };
+        assert_eq!(unsafe { dp_term_scrollback_len(t) }, 0);
+        assert_eq!(row_text(t, 0), "", "the previous session must not show through");
+        // Same pointer, still usable: a renderer holding it is not left with a
+        // dangling one.
+        unsafe { dp_term_feed(t, b"after".as_ptr(), 5) };
+        assert_eq!(row_text(t, 0), "after");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn a_bell_is_reported_once() {
+        let t = dp_term_new(20, 4, 0);
+        unsafe { dp_term_feed(t, b"\x07".as_ptr(), 1) };
+        assert_eq!(unsafe { dp_term_take_events(t) } & DP_EVENT_BELL, DP_EVENT_BELL);
+        assert_eq!(unsafe { dp_term_take_events(t) } & DP_EVENT_BELL, 0, "drained");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn a_notification_carries_its_text_across() {
+        let t = dp_term_new(80, 4, 0);
+        // OSC 777 is the form with a title; this is what an agent raises when
+        // it wants a human.
+        let seq = b"\x1b]777;notify;Claude;needs your permission\x07";
+        unsafe { dp_term_feed(t, seq.as_ptr(), seq.len()) };
+
+        let bits = unsafe { dp_term_take_events(t) };
+        assert_eq!(bits & DP_EVENT_NOTIFICATION, DP_EVENT_NOTIFICATION);
+
+        let title = unsafe { std::ffi::CStr::from_ptr(dp_term_notification_title(t)) };
+        let body = unsafe { std::ffi::CStr::from_ptr(dp_term_notification_body(t)) };
+        assert_eq!(title.to_str().unwrap(), "Claude");
+        assert_eq!(body.to_str().unwrap(), "needs your permission");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn an_osc52_write_reaches_the_client() {
+        let t = dp_term_new(80, 4, 0);
+        // base64 of "copied"
+        let seq = b"\x1b]52;c;Y29waWVk\x07";
+        unsafe { dp_term_feed(t, seq.as_ptr(), seq.len()) };
+        assert_eq!(
+            unsafe { dp_term_take_events(t) } & DP_EVENT_CLIPBOARD,
+            DP_EVENT_CLIPBOARD
+        );
+        let got = unsafe { std::ffi::CStr::from_ptr(dp_term_clipboard(t)) };
+        assert_eq!(got.to_str().unwrap(), "copied");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn search_finds_hits_in_history_and_on_screen() {
+        let t = dp_term_new(20, 4, 100);
+        feed_lines(t, 10);  // "line 0".."line 9", seven rows into scrollback
+
+        let needle = std::ffi::CString::new("line 1").unwrap();
+        let mut hits = [DpMatch { line: 0, start_col: 0, end_col: 0, _pad: 0 }; 8];
+        let n = unsafe { dp_term_search(t, needle.as_ptr(), 1, hits.as_mut_ptr(), 8) };
+        // "line 1" matches its own row and is a prefix of nothing else here.
+        assert_eq!(n, 1);
+        assert_eq!(hits[0].line, 1, "still in scrollback");
+        assert_eq!((hits[0].start_col, hits[0].end_col), (0, 5));
+
+        // A needle on the live screen, which starts at scrollback_len.
+        let sb = unsafe { dp_term_scrollback_len(t) };
+        let needle = std::ffi::CString::new("line 8").unwrap();
+        let n = unsafe { dp_term_search(t, needle.as_ptr(), 1, hits.as_mut_ptr(), 8) };
+        assert_eq!(n, 1);
+        assert_eq!(hits[0].line as usize, sb + 1);
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn search_reports_a_total_larger_than_the_buffer_it_filled() {
+        let t = dp_term_new(20, 6, 100);
+        feed_lines(t, 10);
+        let needle = std::ffi::CString::new("line").unwrap();
+        let mut two = [DpMatch { line: 0, start_col: 0, end_col: 0, _pad: 0 }; 2];
+        let n = unsafe { dp_term_search(t, needle.as_ptr(), 0, two.as_mut_ptr(), 2) };
+        assert_eq!(n, 10, "the count is the truth, not what fitted");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn synchronized_output_is_visible_to_the_client() {
+        let t = dp_term_new(20, 4, 0);
+        assert_eq!(unsafe { dp_term_synchronized_output(t) }, 0);
+        unsafe { dp_term_feed(t, b"\x1b[?2026h".as_ptr(), 8) };
+        assert_eq!(unsafe { dp_term_synchronized_output(t) }, 1, "hold the frame");
+        unsafe { dp_term_feed(t, b"\x1b[?2026l".as_ptr(), 8) };
+        assert_eq!(unsafe { dp_term_synchronized_output(t) }, 0);
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn a_word_selection_comes_back_as_text() {
+        let t = dp_term_new(40, 4, 0);
+        let line = b"run /usr/local/bin/thing --now";
+        unsafe { dp_term_feed(t, line.as_ptr(), line.len()) };
+
+        // Column 10 is inside the path. Word mode is what a long press does,
+        // and the point of it is that the whole path comes back rather than
+        // the fragment between two slashes.
+        unsafe { dp_term_selection_start(t, 0, 10, 1) };
+        let p = unsafe { dp_term_selection_text(t) };
+        assert!(!p.is_null(), "a word selection must yield text");
+        let text = unsafe { std::ffi::CStr::from_ptr(p) }.to_str().unwrap();
+        assert_eq!(text, "/usr/local/bin/thing");
+
+        let mut span = [0isize; 4];
+        assert_eq!(unsafe { dp_term_selection_span(t, span.as_mut_ptr()) }, 1);
+        assert_eq!((span[0], span[1]), (0, 4), "starts at the slash");
+        assert_eq!((span[2], span[3]), (0, 23), "ends at the last letter");
+
+        unsafe { dp_term_selection_clear(t) };
+        assert_eq!(unsafe { dp_term_selection_span(t, span.as_mut_ptr()) }, 0);
+        assert!(unsafe { dp_term_selection_text(t) }.is_null());
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn a_dragged_selection_spans_rows_and_trims_the_ends() {
+        let t = dp_term_new(20, 4, 100);
+        let text = "alpha\r\nbeta\r\ngamma\r\n";
+        unsafe { dp_term_feed(t, text.as_ptr(), text.len()) };
+
+        // Cell mode, from the start of "alpha" to the end of "beta" — the drag
+        // a finger makes after a long press.
+        unsafe { dp_term_selection_start(t, 0, 0, 0) };
+        unsafe { dp_term_selection_update(t, 1, 3) };
+        let p = unsafe { dp_term_selection_text(t) };
+        assert!(!p.is_null());
+        let got = unsafe { std::ffi::CStr::from_ptr(p) }.to_str().unwrap();
+        // Trailing blanks trimmed per row, rows joined by a newline: the
+        // difference between pasting two commands back and pasting two
+        // commands padded out to the width of the terminal.
+        assert_eq!(got, "alpha\nbeta");
+        unsafe { dp_term_free(t) };
+    }
+
+    #[test]
+    fn focus_reports_only_when_the_program_asked() {
+        let t = dp_term_new(20, 4, 0);
+        unsafe { dp_term_report_focus(t, 1) };
+        let mut len = 0usize;
+        unsafe { dp_term_take_output(t, &mut len) };
+        assert_eq!(len, 0, "silent until ?1004 is set");
+
+        unsafe { dp_term_feed(t, b"\x1b[?1004h".as_ptr(), 8) };
+        unsafe { dp_term_report_focus(t, 1) };
+        let p = unsafe { dp_term_take_output(t, &mut len) };
+        assert_eq!(unsafe { std::slice::from_raw_parts(p, len) }, b"\x1b[I");
         unsafe { dp_term_free(t) };
     }
 }

@@ -55,7 +55,15 @@
        trust *before* an app's pinning code is consulted and cancels on
        failure, so a self-signed certificate could never have been rescued by
        pinning however strict the pin — and per-domain exceptions were
-       impossible because box addresses are not known when the app is built. -->
+       impossible because box addresses are not known when the app is built.
+
+       Nothing here exists to make testing easier. A cleartext exception was
+       added during this rebuild so a development daemon on the LAN could be
+       reached from a device, and taken out again: Devpipe is a hosted service,
+       every box is reached over wss://, and widening the app's transport
+       policy to suit a test fixture is the wrong trade whichever way the test
+       comes out. The fixture harness (`--fixture`) needs no network at all,
+       and the simulator reaches loopback without an exception. -->
   <key>NSLocalNetworkUsageDescription</key>
   <string>Connect to a Devpipe daemon on your network.</string>
 </dict>

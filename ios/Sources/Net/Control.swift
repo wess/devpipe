@@ -204,13 +204,37 @@ struct Control {
 
     // MARK: - transport
 
-    private func send<T: Decodable>(
+    /// A path, and possibly a query, joined onto the server.
+    ///
+    /// Not `appendingPathComponent`, which treats what it is given as one path
+    /// *segment* and percent-encodes everything a segment may not contain —
+    /// including `?`. So `/api/boxes/1/events?after=0` became
+    /// `…/events%3Fafter=0`: a path no route matches, sent to a server that
+    /// answered 404, on a call whose failure was swallowed by a `try?`. That is
+    /// why a building box showed an empty log and a spinner rather than the
+    /// lines it was printing the whole time.
+    private func url(for path: String) throws -> URL {
+        let root = baseUrl.absoluteString
+        let joined =
+            root.hasSuffix("/") && path.hasPrefix("/")
+            ? root + path.dropFirst()
+            : root + path
+        guard let url = URL(string: joined) else {
+            throw Failure.message("Could not build a request for \(path).")
+        }
+        return url
+    }
+
+    /// Not private: `Companion` is a second API reached over this same
+    /// session, and giving it its own transport would mean a second place that
+    /// knows how a bearer is attached and what a dead session looks like.
+    func send<T: Decodable>(
         _ method: String,
         _ path: String,
         body: [String: Any]? = nil,
         as: T.Type
     ) async throws -> T {
-        var req = URLRequest(url: baseUrl.appendingPathComponent(path))
+        var req = URLRequest(url: try url(for: path))
         req.httpMethod = method
         if let token = Control.token {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

@@ -6,7 +6,8 @@ struct DaemonConfig: Hashable {
     var host: String
     var port: Int
     var token: String
-    /// SHA-256 of the daemon's certificate. Empty only in `--insecure` mode.
+    /// SHA-256 of the daemon's certificate. Empty when the box has a real
+    /// name and a CA-issued certificate, which is now every box.
     var fingerprint: String
     /// Plain ws, for loopback development. Never a default.
     var insecure: Bool
@@ -16,11 +17,12 @@ struct DaemonConfig: Hashable {
     var httpBase: String { "\(scheme)://\(host):\(port)" }
     var wsBase: String { "\(wsScheme)://\(host):\(port)" }
 
-    /// Overridable at launch so a simulator run can point at a daemon without
-    /// rebuilding:
-    ///   --host 10.0.0.5 --port 7788 --token abc --fingerprint 98f4...
-    static func fromLaunchArgs() -> DaemonConfig {
+    /// Overridable at launch so a simulator run can point at a daemon on this
+    /// machine without a control plane in the middle:
+    ///   --host 10.0.0.5 --port 7788 --token abc --insecure
+    static func fromLaunchArgs() -> DaemonConfig? {
         let args = ProcessInfo.processInfo.arguments
+        guard args.contains("--host") else { return nil }
         func value(_ flag: String, _ fallback: String) -> String {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return fallback }
             return args[i + 1]
@@ -30,136 +32,23 @@ struct DaemonConfig: Hashable {
             port: Int(value("--port", "7788")) ?? 7788,
             token: value("--token", "devpipe"),
             fingerprint: value("--fingerprint", ""),
-            insecure: args.contains("--insecure")
-        )
+            insecure: args.contains("--insecure"))
     }
 }
 
-struct SessionInfo: Codable, Identifiable, Equatable {
-    let id: String
-    let argv: [String]
-    let cols: Int
-    let rows: Int
-    let title: String
-    let alive: Bool
-
-    /// What the session list shows. The child's own title wins when it sets
-    /// one, which is how a running agent labels its own pane.
-    var label: String {
-        if !title.isEmpty { return title }
-        return argv.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? id
-    }
-}
-
-enum DaemonError: Error, LocalizedError {
-    case http(Int, String)
-    case badResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .http(let code, let body): return "daemon returned \(code): \(body)"
-        case .badResponse: return "unreadable response from daemon"
-        }
-    }
-}
-
-struct Daemon {
-    let config: DaemonConfig
-
-    /// Its own session, not `URLSession.shared`: the shared one cannot carry a
-    /// delegate, and the delegate is what does the pinning.
-    private var session: URLSession { URLSessionFactory.make(for: config) }
-
-    private func request(_ method: String, _ path: String, body: Data? = nil) -> URLRequest {
-        var req = URLRequest(url: URL(string: config.httpBase + path)!)
-        req.httpMethod = method
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
-        if let body {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = body
-        }
-        return req
-    }
-
-    private func send<T: Decodable>(_ req: URLRequest, as: T.Type) async throws -> T {
-        let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else { throw DaemonError.badResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            throw DaemonError.http(http.statusCode, String(decoding: data, as: UTF8.self))
-        }
-        return try JSONDecoder().decode(T.self, from: data)
-    }
-
-    func sessions() async throws -> [SessionInfo] {
-        try await send(request("GET", "/v1/sessions"), as: [SessionInfo].self)
-    }
-
-    func create(argv: [String], cols: Int, rows: Int) async throws -> SessionInfo {
-        let body = try JSONEncoder().encode(
-            ["argv": .array(argv.map { .string($0) }),
-             "cols": .number(Double(cols)),
-             "rows": .number(Double(rows))] as [String: JSONValue])
-        return try await send(request("POST", "/v1/sessions", body: body), as: SessionInfo.self)
-    }
-
-    func kill(_ id: String) async throws {
-        _ = try await session.data(for: request("DELETE", "/v1/sessions/\(id)"))
-    }
-}
-
-/// Builds URLSessions that pin, and keeps the delegate alive for as long as
-/// the session it belongs to. A delegate that gets deallocated takes the
-/// pinning with it and the connection quietly falls back to system trust.
-enum URLSessionFactory {
-    private static var cache: [DaemonConfig: URLSession] = [:]
-    private static let lock = NSLock()
-
-    static func make(for config: DaemonConfig) -> URLSession {
-        lock.lock()
-        defer { lock.unlock() }
-        if let existing = cache[config] { return existing }
-        let session: URLSession
-        if config.insecure {
-            session = URLSession(configuration: .default)
-        } else {
-            session = URLSession(
-                configuration: .default,
-                delegate: PinnedTrust(fingerprint: config.fingerprint),
-                delegateQueue: nil)
-        }
-        cache[config] = session
-        return session
-    }
-}
-
-/// Just enough JSON to build one request body without a model type per shape.
-enum JSONValue: Encodable {
-    case string(String)
-    case number(Double)
-    case array([JSONValue])
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        switch self {
-        case .string(let s): try c.encode(s)
-        case .number(let n): try c.encode(n)
-        case .array(let a): try c.encode(a)
-        }
-    }
-}
-
-/// Attaches to one session. Binary frames are pty bytes; text frames are
-/// control JSON — the same split the daemon uses, so neither side has to
-/// frame or escape anything.
+/// Attaches to one session.
+///
+/// Binary frames are pty bytes; text frames are control JSON — the same split
+/// the daemon uses, so neither side has to frame or escape anything.
 ///
 /// It also reconnects, which on iOS is not a nicety. The system suspends a
-/// backgrounded app and the socket dies with it, so *every* trip to another
-/// app ends the connection. Without reconnection the persistence the daemon
-/// provides is invisible: the session really is still running, but the only
-/// way to see it again is to force-quit and relaunch.
+/// backgrounded app and the socket dies with it, so *every* trip to another app
+/// ends the connection. Without reconnection the persistence the daemon
+/// provides is invisible: the session really is still running, but the only way
+/// to see it again would be to force-quit and relaunch.
 final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
     var onBytes: ((Data) -> Void)?
-    var onState: ((String) -> Void)?
+    var onState: ((TransportState) -> Void)?
 
     private let config: DaemonConfig
     private let sessionId: String
@@ -176,7 +65,8 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
     private var generation = 0
     private var attempt = 0
     private var retry: DispatchWorkItem?
-    private let monitor = NWPathMonitor()
+    private var monitor: NWPathMonitor?
+    private var keepalive: Timer?
 
     /// Holds the pinning delegate for the lifetime of the socket. URLSession
     /// keeps only a weak reference to its delegate through us, so letting this
@@ -196,22 +86,18 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(cameBack),
             name: UIApplication.willEnterForegroundNotification, object: nil)
-
-        monitor.pathUpdateHandler = { [weak self] path in
-            guard let self, path.status == .satisfied else { return }
-            reconnectNow(because: "network came back")
-        }
-        monitor.start(queue: DispatchQueue(label: "io.wess.devpipe.path"))
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        monitor.cancel()
+        monitor?.cancel()
+        keepalive?.invalidate()
     }
 
     func start() {
         finished = false
         attempt = 0
+        watchNetwork()
         connect()
     }
 
@@ -219,10 +105,28 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         finished = true
         retry?.cancel()
         retry = nil
-        monitor.cancel()
+        monitor?.cancel()
+        monitor = nil
+        keepalive?.invalidate()
+        keepalive = nil
         generation += 1
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        onState?(.idle)
+    }
+
+    /// Restarted on every `start`, because `stop` cancels it and a cancelled
+    /// `NWPathMonitor` never reports again — a source that was stopped and
+    /// started would have been left with no idea the network came back.
+    private func watchNetwork() {
+        monitor?.cancel()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self, path.status == .satisfied else { return }
+            reconnectNow(because: "network came back")
+        }
+        monitor.start(queue: DispatchQueue(label: "io.wess.devpipe.path"))
+        self.monitor = monitor
     }
 
     private func connect() {
@@ -232,13 +136,33 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         generation += 1
         let mine = generation
 
-        var req = URLRequest(
+        onState?(.connecting)
+        var request = URLRequest(
             url: URL(string: "\(config.wsBase)/v1/sessions/\(sessionId)/attach")!)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
-        let task = session.webSocketTask(with: req)
+        request.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        let task = session.webSocketTask(with: request)
         self.task = task
         task.resume()
         receive(generation: mine)
+        startKeepalive()
+    }
+
+    /// A websocket that dies to a NAT timeout or a dropped cellular bearer
+    /// does not close — it simply stops delivering, and `receive` waits
+    /// forever. A ping every twenty seconds turns that into a failure the
+    /// reconnect logic can act on.
+    private func startKeepalive() {
+        keepalive?.invalidate()
+        keepalive = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            guard let self, let task, !finished else { return }
+            let mine = generation
+            task.sendPing { [weak self] error in
+                guard let self, error != nil else { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.dropped("connection lost", generation: mine)
+                }
+            }
+        }
     }
 
     @objc private func cameBack() {
@@ -248,18 +172,19 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
     private func reconnectNow(because reason: String) {
         guard !finished, task?.state != .running else { return }
         attempt = 0
-        onState?("reconnecting — \(reason)")
+        onState?(.waiting(seconds: 0, reason: reason))
         DispatchQueue.main.async { [weak self] in self?.connect() }
     }
 
     /// Something ended the socket. Reconnect unless we ended it ourselves.
     private func dropped(_ why: String, generation gen: Int) {
         guard !finished, gen == generation else { return }
-        onState?(why)
-        scheduleRetry()
+        keepalive?.invalidate()
+        keepalive = nil
+        scheduleRetry(why)
     }
 
-    private func scheduleRetry() {
+    private func scheduleRetry(_ why: String) {
         guard !finished, retry == nil else { return }
         attempt += 1
         // Backs off to fifteen seconds and stays there. Jitter keeps a daemon
@@ -273,7 +198,7 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
             connect()
         }
         retry = work
-        onState?("reconnecting in \(String(format: "%.0f", delay))s")
+        onState?(.waiting(seconds: Int(delay.rounded()), reason: why))
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
@@ -284,8 +209,12 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
     /// `DEVPIPE_TRACE_INPUT`, where it is opt-in and stays on one machine.
     func send(_ data: Data) {
         guard !data.isEmpty else { return }
+        let mine = generation
         task?.send(.data(data)) { [weak self] error in
-            if error != nil { self?.onState?("not connected") }
+            guard error != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.dropped("connection lost", generation: mine)
+            }
         }
     }
 
@@ -293,8 +222,8 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         // Remembered rather than only sent: a reconnect has to re-assert the
         // size, or the pty keeps whatever it was created with.
         pendingSize = (cols, rows)
-        let msg = #"{"t":"resize","cols":\#(cols),"rows":\#(rows)}"#
-        task?.send(.string(msg)) { _ in }
+        let message = #"{"t":"resize","cols":\#(cols),"rows":\#(rows)}"#
+        task?.send(.string(message)) { _ in }
     }
 
     private func receive(generation gen: Int) {
@@ -302,13 +231,11 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
             guard let self, !finished, gen == generation else { return }
             switch result {
             case .failure:
-                // The message is deliberately plain. "Socket closed with
-                // error -1005" tells the user nothing they can act on.
                 dropped("connection lost", generation: gen)
             case .success(let message):
                 switch message {
-                case .data(let d): onBytes?(d)
-                case .string(let s): handleControl(s)
+                case .data(let data): onBytes?(data)
+                case .string(let text): handleControl(text)
                 @unknown default: break
                 }
                 receive(generation: gen)
@@ -318,23 +245,25 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
 
     private func handleControl(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let kind = obj["t"] as? String
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let kind = object["t"] as? String
         else { return }
         switch kind {
         case "hello":
             attempt = 0
-            onState?("attached to \(obj["id"] as? String ?? sessionId)")
-            // The daemon's size is authoritative only until the client has
-            // laid out; re-assert whatever the view actually measured. On a
+            onState?(.attached(object["id"] as? String ?? sessionId))
+            // The daemon's size is authoritative only until the client has laid
+            // out; re-assert whatever the view actually measured. On a
             // reconnect this is what puts the pty back to the right size.
             if let size = pendingSize { resize(cols: size.cols, rows: size.rows) }
         case "resync":
-            onState?("caught up")
+            onState?(.resynced)
         case "exit":
             // The child is gone, so retrying would attach to nothing.
             finished = true
-            onState?("session ended")
+            keepalive?.invalidate()
+            keepalive = nil
+            onState?(.ended("session ended"))
         default:
             break
         }
@@ -357,7 +286,6 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         didOpenWithProtocol protocol: String?
     ) {
         attempt = 0
-        onState?("connected")
     }
 
     func urlSession(

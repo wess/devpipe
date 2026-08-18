@@ -1,0 +1,453 @@
+/* Cloud Asylum — the run-centric view.
+ *
+ * Nord, light and dark, the same palette Stohr uses, because these are the same
+ * product family and a person moving between them should not have to relearn
+ * what a surface or a danger colour looks like.
+ *
+ * Two deliberate departures from Stohr's sheet:
+ *
+ *   1. No `@import` of Google Fonts. `security/headers.ts` sets
+ *      `font-src 'self'`, so a webfont from fonts.gstatic.com is refused by the
+ *      policy and the page silently falls back — which looks like a rendering
+ *      bug rather than a blocked request. System faces are what the iPad app
+ *      and the lander already use.
+ *   2. Every class is `az-` prefixed. The existing terminal shell owns `.app`,
+ *      `.sidebar`, `.row` and friends in `style.css`, and two stylesheets
+ *      quietly fighting over `.row` is the kind of bug that only shows up on
+ *      the one screen nobody opened before shipping.
+ */
+
+:root {
+  /* Nord — Snow Storm + Frost. */
+  --az-bg: #e5e9f0;
+  --az-panel: #eceff4;
+  --az-elev: #ffffff;
+  --az-line: #d8dee9;
+  --az-line-strong: #c8d0dd;
+  --az-text: #2e3440;
+  --az-soft: #3b4252;
+  --az-muted: #4c566a;
+  --az-brand: #5e81ac;
+  --az-brand-fg: #eceff4;
+  --az-brand-soft: rgba(94, 129, 172, 0.14);
+  --az-hover: rgba(94, 129, 172, 0.08);
+  --az-danger: #bf616a;
+  --az-danger-soft: rgba(191, 97, 106, 0.12);
+  --az-ok: #4f6e3b;
+  --az-ok-soft: rgba(163, 190, 140, 0.22);
+  --az-warn: #9a6b1f;
+  --az-warn-soft: rgba(235, 203, 139, 0.28);
+  --az-shadow: 0 1px 2px rgba(46, 52, 64, 0.04), 0 2px 6px rgba(46, 52, 64, 0.06);
+  --az-radius: 10px;
+  --az-radius-sm: 7px;
+}
+
+[data-theme="dark"] {
+  /* Nord — Polar Night + Frost. */
+  --az-bg: #2e3440;
+  --az-panel: #3b4252;
+  --az-elev: #434c5e;
+  --az-line: #434c5e;
+  --az-line-strong: #4c566a;
+  --az-text: #eceff4;
+  --az-soft: #e5e9f0;
+  --az-muted: #d8dee9;
+  --az-brand: #88c0d0;
+  --az-brand-fg: #2e3440;
+  --az-brand-soft: rgba(136, 192, 208, 0.16);
+  --az-hover: rgba(136, 192, 208, 0.1);
+  --az-danger: #bf616a;
+  --az-danger-soft: rgba(191, 97, 106, 0.2);
+  --az-ok: #a3be8c;
+  --az-ok-soft: rgba(163, 190, 140, 0.16);
+  --az-warn: #ebcb8b;
+  --az-warn-soft: rgba(235, 203, 139, 0.16);
+  --az-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* ---- shell -------------------------------------------------------------- */
+
+.az {
+  display: grid;
+  /* Projects, tasks, the run. Fixed rails and one column that absorbs the
+     slack, so widening the window makes the thing being read bigger rather
+     than spreading three lists further apart. */
+  grid-template-columns: 216px 288px minmax(0, 1fr);
+  /* Both, deliberately. `flex: 1` is what actually sizes it inside the app
+     shell's flex column; `height: 100%` is the fallback for any other parent,
+     and without `min-height: 0` a grid child with its own scroll areas refuses
+     to shrink below its content and the page grows a second scrollbar. */
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  background: var(--az-bg);
+  color: var(--az-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.az-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid var(--az-line);
+  background: var(--az-panel);
+}
+
+.az-col:last-child {
+  border-right: 0;
+  background: var(--az-bg);
+}
+
+.az-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--az-line);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--az-muted);
+  flex: 0 0 auto;
+}
+
+.az-head .az-grow {
+  flex: 1;
+}
+
+.az-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ---- rows --------------------------------------------------------------- */
+
+.az-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.85rem;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--az-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.az-row:hover {
+  background: var(--az-hover);
+}
+
+.az-row.on {
+  background: var(--az-brand-soft);
+  border-left-color: var(--az-brand);
+}
+
+.az-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 0.1rem;
+}
+
+.az-row-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.az-row-sub {
+  font-size: 0.75rem;
+  color: var(--az-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.az-icon {
+  color: var(--az-muted);
+  flex: 0 0 auto;
+}
+
+/* ---- status ------------------------------------------------------------- */
+
+.az-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--az-brand-soft);
+  color: var(--az-brand);
+}
+
+.az-pill.ok {
+  background: var(--az-ok-soft);
+  color: var(--az-ok);
+}
+
+.az-pill.warn {
+  background: var(--az-warn-soft);
+  color: var(--az-warn);
+}
+
+.az-pill.bad {
+  background: var(--az-danger-soft);
+  color: var(--az-danger);
+}
+
+.az-pill.idle {
+  background: transparent;
+  color: var(--az-muted);
+  border: 1px solid var(--az-line-strong);
+}
+
+/* The one state worth an animation: something is waiting on a person. Every
+   other status is a fact, and a fact that pulses is just noise. */
+.az-pill.warn.blocked {
+  animation: az-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes az-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.az-badge {
+  min-width: 1.15rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--az-danger);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.15rem;
+}
+
+/* ---- runs --------------------------------------------------------------- */
+
+.az-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.az-detail-head {
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid var(--az-line);
+  background: var(--az-panel);
+  flex: 0 0 auto;
+}
+
+.az-detail-head h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.az-runs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+  padding: 1.15rem;
+  align-content: start;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.az-run {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid var(--az-line);
+  border-radius: var(--az-radius);
+  background: var(--az-elev);
+  box-shadow: var(--az-shadow);
+}
+
+.az-run-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.az-run-agent {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.az-run-branch {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.74rem;
+  color: var(--az-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.az-run-activity {
+  font-size: 0.82rem;
+  color: var(--az-soft);
+}
+
+/* ---- composer ----------------------------------------------------------- */
+
+.az-composer {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1.15rem;
+  border-top: 1px solid var(--az-line);
+  background: var(--az-panel);
+  flex: 0 0 auto;
+}
+
+.az-composer textarea {
+  flex: 1;
+  resize: none;
+  min-height: 2.4rem;
+  max-height: 8rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--az-line-strong);
+  border-radius: var(--az-radius-sm);
+  background: var(--az-elev);
+  color: var(--az-text);
+  font: inherit;
+}
+
+.az-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid transparent;
+  border-radius: var(--az-radius-sm);
+  background: var(--az-brand);
+  color: var(--az-brand-fg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.az-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.az-btn.ghost {
+  background: transparent;
+  border-color: var(--az-line-strong);
+  color: var(--az-muted);
+}
+
+.az-btn.ghost:hover:not(:disabled) {
+  color: var(--az-text);
+  background: var(--az-hover);
+}
+
+.az-btn.icon {
+  padding: 0.35rem;
+  border-color: transparent;
+  background: transparent;
+  color: var(--az-muted);
+}
+
+.az-btn.icon:hover:not(:disabled) {
+  color: var(--az-text);
+  background: var(--az-hover);
+}
+
+/* ---- states ------------------------------------------------------------- */
+
+.az-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+  color: var(--az-muted);
+}
+
+.az-empty strong {
+  color: var(--az-text);
+  font-weight: 600;
+}
+
+.az-empty p {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.az-note {
+  margin: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--az-line);
+  border-radius: var(--az-radius-sm);
+  background: var(--az-elev);
+  font-size: 0.82rem;
+  color: var(--az-muted);
+}
+
+.az-note.bad {
+  border-color: var(--az-danger);
+  background: var(--az-danger-soft);
+  color: var(--az-danger);
+}
+
+.az-spin {
+  animation: az-spin 1s linear infinite;
+}
+
+@keyframes az-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:where(.az) :focus-visible {
+  outline: 2px solid var(--az-brand);
+  outline-offset: 2px;
+}
+
+/* ---- narrow ------------------------------------------------------------- */
+
+/* One column at a time on a phone. The rails become a back-stack rather than
+   shrinking, because three 100px columns is not a smaller version of this
+   layout — it is an unusable one. */
+@media (max-width: 900px) {
+  .az {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .az-col {
+    display: none;
+    border-right: 0;
+  }
+
+  .az-col.focused {
+    display: flex;
+  }
+}

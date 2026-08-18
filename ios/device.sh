@@ -137,6 +137,13 @@ plutil -replace CFBundleSupportedPlatforms -json '["iPhoneOS"]' "$APP/Info.plist
 plutil -replace MinimumOSVersion -string "17.0" "$APP/Info.plist"
 cp "$IOS"/Resources/*.raw "$APP/" 2>/dev/null || true
 
+echo "==> shaders (iphoneos)"
+# Precompiled rather than built from source at launch: a shader that does not
+# compile should fail the build, not the app, and 80ms of startup is a
+# noticeable stall on a screen whose whole job is to appear instantly.
+xcrun -sdk iphoneos metal -O -c "$IOS/Sources/Render/Shaders.metal" -o "$BUILD/Shaders.air"
+xcrun -sdk iphoneos metallib "$BUILD/Shaders.air" -o "$APP/default.metallib"
+
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 xcrun -sdk iphoneos swiftc \
   -target "$TARGET_TRIPLE" \
@@ -148,7 +155,7 @@ xcrun -sdk iphoneos swiftc \
   -I "$IOS/include" \
   "$LIBDIR/libdevpipecore.a" \
   -o "$APP/Devpipe" \
-  "$IOS"/Sources/*.swift
+  $(find "$IOS/Sources" -name "*.swift" | sort)
 
 # ---- sign -------------------------------------------------------------------
 #

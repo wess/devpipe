@@ -6,3 +6,4 @@ target-linux-site/
 .devpipe/
 src/web/dist/
 node_modules/
+.build/

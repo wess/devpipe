@@ -1,4 +1,5 @@
 import {
+  Activity,
   ChevronLeft,
   CircleDot,
   CreditCard,
@@ -20,9 +21,11 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { commandOf } from "../util/shell.ts"
 import * as api from "./api.ts"
+import { applyTheme, getTheme } from "./asylum/theme.ts"
 import { Admin } from "./components/Admin.tsx"
 import { BoxSetup } from "./components/BoxSetup.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
+import { Runs } from "./components/Runs.tsx"
 import { Settings } from "./components/Settings.tsx"
 import { TerminalView } from "./components/TerminalView.tsx"
 import { Vault } from "./components/Vault.tsx"
@@ -1024,6 +1027,12 @@ const App: React.FC = () => {
           <span>Devpipe</span>
         </button>
         <span className="grow" />
+        {/* First, and named for what it is. The terminals are still one click
+            away and always will be — they are just no longer the only thing
+            this product knows how to show you. */}
+        <button type="button" className={`ghost small ${route.view === "runs" ? "on" : ""}`} onClick={to("runs")}>
+          <Activity size={14} /> Runs
+        </button>
         {route.view !== "workspace" && (
           <button type="button" className="ghost small" onClick={to("workspace")}>
             <ChevronLeft size={14} /> Terminals
@@ -1078,6 +1087,7 @@ const App: React.FC = () => {
           </button>
         </p>
       )}
+      {route.view === "runs" && <Runs onBack={() => go({ view: "workspace", tab: "overview" })} />}
       {route.view === "workspace" && <Workspace vtReady={ready} />}
       {route.view === "billing" && <Billing />}
       {route.view === "vault" && <Vault />}
@@ -1086,6 +1096,10 @@ const App: React.FC = () => {
     </div>
   )
 }
+
+// Before the first paint, so the runs view never renders light on a dark
+// machine and then corrects itself a frame later.
+applyTheme(getTheme())
 
 const root = document.getElementById("root")
 if (root)

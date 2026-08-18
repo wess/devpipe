@@ -37,6 +37,13 @@ mkdir -p "$APP"
 cp "$IOS/Info.plist" "$APP/Info.plist"
 cp "$IOS"/Resources/*.raw "$APP/" 2>/dev/null || true
 
+echo "==> shaders (iphonesimulator)"
+# Precompiled rather than built from source at launch: a shader that does not
+# compile should fail the build, not the app, and 80ms of startup is a
+# noticeable stall on a screen whose whole job is to appear instantly.
+xcrun -sdk iphonesimulator metal -O -c "$IOS/Sources/Render/Shaders.metal" -o "$BUILD/Shaders.air"
+xcrun -sdk iphonesimulator metallib "$BUILD/Shaders.air" -o "$APP/default.metallib"
+
 SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 # -parse-as-library: no main.swift here, the entry point is @main in App.swift.
 xcrun -sdk iphonesimulator swiftc \
@@ -49,7 +56,7 @@ xcrun -sdk iphonesimulator swiftc \
   -I "$IOS/include" \
   "$LIBDIR/libdevpipecore.a" \
   -o "$APP/Devpipe" \
-  "$IOS"/Sources/*.swift
+  $(find "$IOS/Sources" -name "*.swift" | sort)
 
 echo "==> boot $DEVICE"
 UDID="$(xcrun simctl list devices available | grep -F "$DEVICE (" | head -1 |
