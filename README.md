@@ -1,17 +1,29 @@
 # Devpipe
 
-Persistent terminal sessions on a remote box, from a browser or an iPad.
+Agents that keep working when you close the laptop.
+
+A run is the unit: one agent, on its own branch, in its own worktree, on a box
+you own. Start one from anywhere, watch what it is doing, answer it when it asks
+— from a browser, a phone, or the terminal. The machine is rented by the hour
+and given back when nobody is using it; the files are on a volume that outlives
+it.
+
+There is a terminal, and it is very good. It is not the product.
 
 ```
 src/            the Atlas app — API and web client (Bun + TypeScript)
-  auth/ users/ admin/ boxes/ terminals/ settings/ waitlist/
+  auth/         sessions, the cookie, and what a session is bound to
+  boxes/        provisioning, reclaim, and reconciling against the provider
+  previews/ shares/   showing a port or a terminal to somebody who is not you
+  vault/ billing/ workspaces/ settings/ users/ admin/ terminals/
   web/          the React client, including the terminal
-migrations/     one statement per migration (the SQLite driver prepares one)
+migrations/     schema, one directory per change, up and down
 core/           Rust: sinclair's VT behind a C ABI → iOS staticlib and .wasm
-daemon/         Rust: the per-box daemon, pty sessions over a websocket
-ios/            Swift: the iPad client
+daemon/         Rust: the per-box daemon — ptys, files, and a port proxy
+ios/            Swift: the iPhone and iPad client
 site/           the lander, Caddyfile, and deploy
 deploy/         box provisioning and the daemon's systemd unit
+scripts/        sweep — what the provider is billing for that nothing claims
 ```
 
 ## One emulator, two clients
