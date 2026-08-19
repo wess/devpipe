@@ -3,6 +3,7 @@ import { connect } from "@atlas/db"
 import { migrate } from "@atlas/migrate"
 import { router } from "@atlas/server"
 import { adminRoutes } from "./admin/index.ts"
+import { setAppOrigin } from "./auth/cookie.ts"
 import { authRoutes } from "./auth/index.ts"
 import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
@@ -121,6 +122,12 @@ const emailer = createEmailer({
   from: config.emailFrom,
   baseUrl: config.emailBaseUrl || null,
 })
+
+// What counts as "from this site" for a cookie-authenticated request, and
+// whether that cookie is marked Secure. Set here rather than read inside the
+// auth code, so the default lives beside every other piece of configuration
+// instead of in a second place that can drift from it.
+setAppOrigin(config.appUrl)
 
 const baseFetch = router(
   ...authRoutes(db),

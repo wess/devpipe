@@ -268,6 +268,38 @@ The same token authenticates the box's own callbacks to
 `/boxes/callback` and `/boxes/callback/log`, compared against the stored value
 for the hostname the callback names.
 
+## The browser's session
+
+An `HttpOnly` cookie, `dp_session`, host-only and `SameSite=Lax`. It was a string
+in `localStorage`, which made one injected script on this origin an account
+takeover — with the `Content-Security-Policy` the only thing in the way. That
+policy is good and it is still there. It was also the *entire* defence, and one
+inline `<script>` added by somebody in a hurry would have quietly turned every
+injection into a full compromise. A credential JavaScript cannot read fails safe.
+
+iOS and `dpctl` keep sending `Authorization: Bearer`. Each holds its token in a
+keychain no web page can reach, so there is nothing to gain by moving them and a
+working thing to break. `requireAuth` takes either, header first.
+
+**`SameSite` is not the CSRF defence here, and cannot be.** Boxes and previews
+live at `*.devpipe.com`, which is the same *site* as the app: a preview serving
+somebody's half-written application could POST to the API and a `Lax` — or even
+`Strict` — cookie would ride along. What separates them is the **origin**, which
+differs even though the site does not. So a cookie-authenticated request must
+carry `Origin: https://devpipe.com`; a missing one is accepted on GET and HEAD,
+because a top-level navigation sends none, and refused on anything that can
+change something.
+
+Bearer-authenticated requests are **not** origin-checked, and the asymmetry is
+the point: a page can make a browser *send* a cookie without being able to read
+it, so a cookie needs a second signal that the request came from us. A header has
+to be put there by whoever holds the token.
+
+A private preview is admitted by a **one-minute signed code**, not by the
+session. The app has no token in JavaScript to send to another origin, and a
+value meaning "let this browser see preview 41 for the next minute" is a far
+smaller thing to hand over than one meaning "act as this account".
+
 ## The browser
 
 The session token is in `localStorage`, which makes any injected script an

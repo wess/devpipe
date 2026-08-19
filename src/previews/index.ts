@@ -7,7 +7,7 @@ import { consume } from "../security/ratelimit.ts"
 import { getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 import { sign, unsign } from "../util/signed.ts"
-import { sha256Hex, shortId } from "../util/token.ts"
+import { shortId } from "../util/token.ts"
 
 /**
  * A dev server on a box, looked at in a browser, without putting it on the
@@ -33,6 +33,17 @@ import { sha256Hex, shortId } from "../util/token.ts"
  * belonging to the preview's owner. `link` previews are the deliberate
  * exception, for showing somebody who has no account — and those expire.
  */
+
+/**
+ * The capability the app trades a session for.
+ *
+ * Deliberately not the session. The app holds an `HttpOnly` cookie, so there is
+ * nothing in JavaScript to send to another origin — and a value that means "let
+ * this browser see preview 41 for the next minute" is a much smaller thing to
+ * hand over than one that means "act as this account".
+ */
+const grantPayload = (previewId: number) => `grant:${previewId}`
+const GRANT_TTL = 60
 
 /** How long a granted browser stays admitted before being asked again. */
 const COOKIE_TTL = 8 * 3600
@@ -200,19 +211,6 @@ const page = (title: string, body: string, status: number) =>
     { status, headers: { "content-type": "text/html; charset=utf-8" } },
   )
 
-/** The user id behind a bearer, without the pipeline that halts a `Conn`. */
-const sessionUser = async (db: Connection, header: string | null): Promise<number | null> => {
-  if (!header?.startsWith("Bearer ")) return null
-  const presented = header.slice(7).trim()
-  if (!presented) return null
-  const session = (await db.one(
-    from("sessions").where(q => q("token_hash").equals(sha256Hex(presented))),
-  )) as any
-  if (!session) return null
-  if (new Date(session.expires_at).getTime() < Date.now()) return null
-  return Number(session.user_id)
-}
-
 /**
  * Everything a preview hostname answers, or null when the Host is not one.
  *
@@ -224,12 +222,18 @@ const sessionUser = async (db: Connection, header: string | null): Promise<numbe
  */
 export const previewHost = (db: Connection, appUrl: string) => {
   /**
-   * A session on the app, turned into a cookie for this origin.
+   * A one-minute capability from the app, turned into a cookie for this origin.
    *
    * Cross-origin because it has to be: the app holds the session and this
-   * hostname holds the cookie, and only the app can prove who is asking. Same
-   * *site* though — both sit under the box domain — so the cookie it sets is
-   * sent on the navigation that follows without needing `SameSite=None`.
+   * hostname holds the cookie. Same *site* though — both sit under the box
+   * domain — so the cookie it sets is sent on the navigation that follows
+   * without needing `SameSite=None`.
+   *
+   * It takes a code rather than the session itself, and that is not a detail.
+   * The app's session is an `HttpOnly` cookie now, so there is no token in
+   * JavaScript to put in a header — and there should not be. What the app can
+   * hand over is a signed value that means one thing, for one preview, for
+   * sixty seconds, and is worthless anywhere else.
    */
   const grant = async (req: Request, preview: PreviewRow): Promise<Response> => {
     const origin = appUrl.replace(/\/$/, "")
@@ -246,10 +250,13 @@ export const previewHost = (db: Connection, appUrl: string) => {
       return Response.json({ error: "Not from there." }, { status: 403, headers: cors })
     }
 
-    const me = await sessionUser(db, req.headers.get("authorization"))
-    if (!me) return Response.json({ error: "Sign in to continue." }, { status: 401, headers: cors })
-    if (me !== preview.user_id) {
-      return Response.json({ error: "That preview is not yours." }, { status: 403, headers: cors })
+    const body = (await req.json().catch(() => null)) as { code?: string } | null
+    const code = String(body?.code ?? "")
+    if (!code || unsign(code) !== grantPayload(preview.id)) {
+      return Response.json({ error: "That did not work. Open the preview again." }, {
+        status: 403,
+        headers: cors,
+      })
     }
 
     return Response.json(
@@ -514,7 +521,14 @@ export const previewRoutes = (db: Connection) => {
         if (!live(row) || row.user_id !== me.id) {
           return json(c, 404, { error: "No such preview." })
         }
-        return json(c, 200, { url: previewUrl(row.slug, await boxDomain(db)) })
+        // Where to go, and the thing that gets you in, in one answer. The code
+        // is signed, names one preview, and dies in a minute — long enough for
+        // the redirect that follows and short enough that leaving it in a
+        // console log costs nothing.
+        return json(c, 200, {
+          url: previewUrl(row.slug, await boxDomain(db)),
+          code: sign(grantPayload(row.id), GRANT_TTL),
+        })
       }),
     ),
 

@@ -234,11 +234,17 @@ describe("who may open a preview", () => {
   test("a granted cookie opens the private one, and only that one", async () => {
     const mine = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
     const other = await call("POST", `/boxes/${boxId}/previews`, { port: 4000 }, token)
+    const slug = new URL(mine.data.url).host.split(".")[0] as string
 
+    // The app's own session is a cookie it cannot read, so what it passes to
+    // another origin is a code that means one preview for one minute.
+    const asked = await call("GET", `/previews/${slug}/origin`, undefined, token)
+    expect(asked.status).toBe(200)
     const granted = await host.handle(
       onPreview(`${mine.data.url}/__dp/grant`, {
         method: "POST",
-        headers: { origin: APP, authorization: `Bearer ${token}` },
+        headers: { origin: APP, "content-type": "application/json" },
+        body: JSON.stringify({ code: asked.data.code }),
       }),
     )
     expect(granted?.status).toBe(200)
@@ -259,13 +265,38 @@ describe("who may open a preview", () => {
     expect(refused?.status).toBe(302)
   })
 
-  test("no cookie for somebody else's preview", async () => {
+  test("no code for somebody else's preview", async () => {
     const { data } = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
+    const slug = new URL(data.url).host.split(".")[0] as string
     const theirs = await session(otherId)
+    // 404 rather than 403: telling a stranger the slug is real is telling them
+    // what to keep.
+    expect((await call("GET", `/previews/${slug}/origin`, undefined, theirs)).status).toBe(404)
+  })
+
+  test("a code for one preview does not open another", async () => {
+    const mine = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
+    const other = await call("POST", `/boxes/${boxId}/previews`, { port: 4000 }, token)
+    const slug = new URL(mine.data.url).host.split(".")[0] as string
+    const asked = await call("GET", `/previews/${slug}/origin`, undefined, token)
+
+    const res = await host.handle(
+      onPreview(`${other.data.url}/__dp/grant`, {
+        method: "POST",
+        headers: { origin: APP, "content-type": "application/json" },
+        body: JSON.stringify({ code: asked.data.code }),
+      }),
+    )
+    expect(res?.status).toBe(403)
+  })
+
+  test("a made-up code opens nothing", async () => {
+    const { data } = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
     const res = await host.handle(
       onPreview(`${data.url}/__dp/grant`, {
         method: "POST",
-        headers: { origin: APP, authorization: `Bearer ${theirs}` },
+        headers: { origin: APP, "content-type": "application/json" },
+        body: JSON.stringify({ code: "not.a.signature" }),
       }),
     )
     expect(res?.status).toBe(403)
@@ -273,10 +304,13 @@ describe("who may open a preview", () => {
 
   test("the grant is refused from anywhere but the app", async () => {
     const { data } = await call("POST", `/boxes/${boxId}/previews`, { port: 3000 }, token)
+    const slug = new URL(data.url).host.split(".")[0] as string
+    const asked = await call("GET", `/previews/${slug}/origin`, undefined, token)
     const res = await host.handle(
       onPreview(`${data.url}/__dp/grant`, {
         method: "POST",
-        headers: { origin: "https://evil.example.com", authorization: `Bearer ${token}` },
+        headers: { origin: "https://evil.example.com", "content-type": "application/json" },
+        body: JSON.stringify({ code: asked.data.code }),
       }),
     )
     expect(res?.status).toBe(403)

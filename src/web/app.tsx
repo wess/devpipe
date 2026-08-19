@@ -276,7 +276,7 @@ const Reset: React.FC<{ token: string; onDone: (notice: string) => void }> = ({ 
     setError(null)
     try {
       await api.resetPassword(token, password)
-      api.setSession(null, null)
+      api.setSession(null)
       // A reset link left in history is a link somebody else can find. It goes
       // to the app rather than to "/", which is the lander — a reload here
       // should land on the sign-in form the user is about to need, not on the
@@ -1108,8 +1108,8 @@ const PreviewGate: React.FC<{ slug: string }> = ({ slug }) => {
     const to = asked.startsWith("/") && !asked.startsWith("//") ? asked : "/"
     ;(async () => {
       try {
-        const { url } = await api.previewOrigin(slug)
-        await api.grantPreview(url)
+        const { url, code } = await api.previewOrigin(slug)
+        await api.grantPreview(url, code)
         if (!cancelled) location.replace(`${url}${to}`)
       } catch (err: any) {
         if (!cancelled) setError(String(err?.message ?? err))

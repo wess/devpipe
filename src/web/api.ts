@@ -69,22 +69,36 @@ export type Catalog = {
   defaults: string[]
 }
 
-let token: string | null = localStorage.getItem("devpipe_token")
+/**
+ * There is no token here, and that is the point.
+ *
+ * The session used to be a string in `localStorage`, which made one injected
+ * script on this origin an account takeover — with the CSP the only thing
+ * standing in the way. It is an `HttpOnly` cookie now: the browser sends it and
+ * no script can read it, so an injection can act as you *while the page is
+ * open* rather than walk away with the account.
+ *
+ * What stays in `localStorage` is the user record, and it is a hint rather than
+ * a credential: it decides whether to render the app or the sign-in form on the
+ * first paint, before `me()` has answered. Anything it claims is re-checked by
+ * the server on the next request, and a 401 clears it.
+ */
 let user: User | null = (() => {
   const raw = localStorage.getItem("devpipe_user")
   return raw ? JSON.parse(raw) : null
 })()
 
 export const currentUser = () => user
-export const isSignedIn = () => Boolean(token)
+export const isSignedIn = () => Boolean(user)
 
-export const setSession = (t: string | null, u: User | null) => {
-  token = t
+export const setSession = (u: User | null) => {
   user = u
-  if (t) localStorage.setItem("devpipe_token", t)
-  else localStorage.removeItem("devpipe_token")
   if (u) localStorage.setItem("devpipe_user", JSON.stringify(u))
   else localStorage.removeItem("devpipe_user")
+  // Left over from when the token lived here. Removed on every path through
+  // this function so an upgrade clears it rather than leaving a live session
+  // token in storage for the rest of its thirty days.
+  localStorage.removeItem("devpipe_token")
 }
 
 /**
@@ -113,17 +127,18 @@ class ApiError extends Error {
 const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: {
-      ...(body !== undefined ? { "content-type": "application/json" } : {}),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers: body !== undefined ? { "content-type": "application/json" } : {},
+    // Same origin, so the cookie rides along by default — said out loud because
+    // this is now the only credential the app has, and a future change to a
+    // different origin would otherwise fail as a mysterious 401.
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   const data = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) {
     // A dead session should return the user to sign-in rather than showing an
     // error they can do nothing about.
-    if (res.status === 401) setSession(null, null)
+    if (res.status === 401) setSession(null)
     throw new ApiError((data as any)?.error ?? `Request failed (${res.status})`, res.status)
   }
   return data as T
@@ -151,14 +166,17 @@ export const register = async (input: {
   password: string
   invite?: string
 }) => {
+  // The token in the body is for iOS and dpctl, which keep theirs in a
+  // keychain. This client is handed a cookie it cannot read, and deliberately
+  // does nothing with the string.
   const out = await call<{ token: string; user: User }>("POST", "/auth/register", input)
-  setSession(out.token, out.user)
+  setSession(out.user)
   return out.user
 }
 
 export const login = async (email: string, password: string) => {
   const out = await call<{ token: string; user: User }>("POST", "/auth/login", { email, password })
-  setSession(out.token, out.user)
+  setSession(out.user)
   return out.user
 }
 
@@ -166,7 +184,7 @@ export const logout = async () => {
   try {
     await call("POST", "/auth/logout")
   } finally {
-    setSession(null, null)
+    setSession(null)
   }
 }
 
@@ -234,20 +252,31 @@ export const createPreview = (
 export const revokePreview = (id: number) => call<{ ok: true }>("DELETE", `/previews/${id}`)
 
 /** Where a preview lives, so the app never turns a slug in a URL into a host. */
-export const previewOrigin = (slug: string) => call<{ url: string }>("GET", `/previews/${slug}/origin`)
+/**
+ * Where a preview lives, and a one-minute capability to get into it.
+ *
+ * Both in one answer because they are one question. The app's own session is a
+ * cookie it cannot read, so there is nothing to send to another origin — what
+ * it can pass along is this code, which means "admit a browser to preview 41"
+ * and nothing else, for sixty seconds.
+ */
+export const previewOrigin = (slug: string) =>
+  call<{ url: string; code: string }>("GET", `/previews/${slug}/origin`)
 
 /**
- * Hands the preview's own origin a cookie, using the session this app holds.
+ * Hands the preview's own origin the code, and takes back a cookie for it.
  *
  * Cross-origin and deliberately not through `call`: it goes to the preview
  * hostname rather than to the API, and it is the one request here that needs
- * `credentials` — the whole point is the `Set-Cookie` that comes back.
+ * `credentials: "include"` — the whole point is the `Set-Cookie` that comes
+ * back, on a host this page is not.
  */
-export const grantPreview = async (origin: string): Promise<void> => {
+export const grantPreview = async (origin: string, code: string): Promise<void> => {
   const res = await fetch(`${origin}/__dp/grant`, {
     method: "POST",
     credentials: "include",
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }),
   })
   if (!res.ok) {
     const data = await res.json().catch(() => null)
@@ -422,15 +451,13 @@ export const adminSaveBilling = (values: { margin_pct?: number; secret_key?: str
  * The claims list as a file.
  *
  * Not `call`, because the response is a CSV rather than JSON — but the same
- * bearer, which is the entire point: the route is owner-only, and the link this
- * replaced sent no credential at all.
+ * session, which is the entire point: the route is owner-only, and the link
+ * this replaced sent no credential at all.
  */
 export const claimsCsv = async (): Promise<Blob> => {
-  const res = await fetch(`${BASE}/admin/claims.csv`, {
-    headers: token ? { authorization: `Bearer ${token}` } : {},
-  })
+  const res = await fetch(`${BASE}/admin/claims.csv`, { credentials: "same-origin" })
   if (!res.ok) {
-    if (res.status === 401) setSession(null, null)
+    if (res.status === 401) setSession(null)
     const data = await res.json().catch(() => null)
     throw new ApiError((data as any)?.error ?? `Export failed (${res.status})`, res.status)
   }

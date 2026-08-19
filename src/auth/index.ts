@@ -1,13 +1,14 @@
 import { hash, verify } from "@atlas/auth"
 import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
-import { get, json, parseJson, pipeline, post } from "@atlas/server"
+import { get, json, parseJson, pipeline, post, putHeader } from "@atlas/server"
 import { isDisposableEmail } from "../security/abuse.ts"
 import { clientIp, rateLimit, submittedEmail } from "../security/ratelimit.ts"
 import { getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 import { randomToken, sha256Hex } from "../util/token.ts"
 import { checkUsername, isEmail, normaliseUsername } from "../util/username.ts"
+import { clearedCookie, sessionCookie } from "./cookie.ts"
 import { requireAuth } from "./guard.ts"
 
 const SESSION_DAYS = 30
@@ -31,6 +32,17 @@ export const startSession = async (db: Connection, userId: number, conn: any) =>
   )
   return token
 }
+
+/**
+ * The session, handed over both ways at once.
+ *
+ * The cookie is what a browser will use, and it cannot read it. The token in the
+ * body is what iOS and `dpctl` keep, each in a keychain no web page can reach —
+ * so there is nothing to gain by moving them and a working thing to break. The
+ * web client simply stops storing what it is given.
+ */
+const withSession = (c: any, status: number, token: string, user: unknown) =>
+  json(putHeader(c, "set-cookie", sessionCookie(token)), status, { token, user })
 
 const publicUser = (row: any) => ({
   id: row.id,
@@ -168,7 +180,7 @@ export const authRoutes = (db: Connection) => {
         }
         const token = await startSession(db, user.id, c)
         await audit(db, user.id, isOwner ? "owner.claimed" : "user.registered", email)
-        return json(c, 201, { token, user: publicUser(user) })
+        return withSession(c, 201, token, publicUser(user))
       }),
     ),
 
@@ -193,20 +205,26 @@ export const authRoutes = (db: Connection) => {
         }
 
         const token = await startSession(db, row.id, c)
-        return json(c, 200, { token, user: publicUser(row) })
+        return withSession(c, 200, token, publicUser(row))
       }),
     ),
 
     post(
       "/auth/logout",
       authed(async c => {
-        const presented = (c.headers.get("authorization") ?? "").slice(7).trim()
-        await db.execute(
-          from("sessions")
-            .where(q => q("token_hash").equals(sha256Hex(presented)))
-            .del(),
-        )
-        return json(c, 200, { ok: true })
+        // Whatever the request presented, header or cookie. Reading the header
+        // back would end nothing at all for a browser, which no longer sends
+        // one — and "signed out" that leaves the session alive is the worst
+        // possible answer to that button.
+        const hash = ((c as any).assigns.session as { hash: string } | undefined)?.hash
+        if (hash) {
+          await db.execute(
+            from("sessions")
+              .where(q => q("token_hash").equals(hash))
+              .del(),
+          )
+        }
+        return json(putHeader(c, "set-cookie", clearedCookie()), 200, { ok: true })
       }),
     ),
 
