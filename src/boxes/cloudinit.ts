@@ -317,7 +317,8 @@ ${
 chmod 0755 /usr/local/bin/devpipe
 # Registered for Claude Code so an agent finds the vault without being told it
 # exists. Written to the box user's config rather than a system path: this is
-# their tool, and the daemon runs as root.
+# their tool, and cloud-init is running as root while the daemon that will
+# launch it runs as devpipe.
 sudo -u devpipe mkdir -p /home/devpipe/.config/claude
 sudo -u devpipe tee /home/devpipe/.config/claude/mcp.json >/dev/null <<'MCPEOF'
 { "mcpServers": { "devpipe": { "command": "/usr/local/bin/devpipe", "args": ["mcp"] } } }

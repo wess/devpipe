@@ -152,8 +152,9 @@ the same bearer, rather than reopening SSH — which a box locks down on purpose
 waking builds a new machine.
 
 **There is no path jail, and that is the considered answer.** The bearer that
-reaches `/v1/fs` is the same one that spawns a process on `/v1/sessions`, which
-is a root shell — so a restriction would stop nothing an attacker could not do
+reaches `/v1/fs` is the same one that spawns a process on `/v1/sessions` — a
+shell as `devpipe`, who has passwordless sudo by design, so root is one word
+away — and a restriction would stop nothing an attacker could not do
 in one more request, while breaking the legitimate case of reading a config
 outside the home directory. The credential is the boundary, and it never leaves
 the control plane on the web path or the client's keychain on the `dpctl` path.

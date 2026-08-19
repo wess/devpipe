@@ -13,10 +13,11 @@
 //! transfer.
 //!
 //! **No jail, and that is considered.** The bearer that reaches here is the same
-//! one that spawns a process on `/v1/sessions`, which is a root shell — so a
-//! path restriction would stop nothing an attacker could not do in one more
-//! request, while breaking the legitimate case of reading a config outside the
-//! home directory. The credential is the boundary. What this does refuse is the
+//! one that spawns a process on `/v1/sessions` — a shell as the box user, who
+//! holds passwordless sudo by design, so root is one word away. A path
+//! restriction would stop nothing an attacker could not do in one more request,
+//! while breaking the legitimate case of reading a config outside the home
+//! directory. The credential is the boundary. What this does refuse is the
 //! accident: writing to a path that is not absolute.
 //!
 //! Directories come *down* as a tar and go *up* one file at a time, which looks
