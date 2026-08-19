@@ -37,7 +37,15 @@ export class Session {
    */
   constructor(
     private url: string,
-    private token: string,
+    /**
+     * The attach credential, or a way to get one.
+     *
+     * A function, in practice. What the control plane hands out is scoped to
+     * attaching and expires in two minutes, so a value composed once and kept
+     * is stale by the second reconnect — and reconnects here are triggered by
+     * a tab coming back into view, which can be hours later.
+     */
+    private token: string | (() => Promise<string>),
     private sessionId: string,
     cols: number,
     rows: number,
@@ -92,14 +100,52 @@ export class Session {
     // enough times on a slow link and it is one live socket per flip.
     this.socket?.close()
 
-    // The token goes in the query string because a browser cannot set headers
-    // on a WebSocket handshake. It is the box's own bearer, reaches only that
-    // box, and the connection is TLS — but it does end up in the box's access
-    // log, which is why it is not the account's credential.
-    const socket = new WebSocket(
-      this.opts.endpoint ??
-        `${this.url}/v1/sessions/${encodeURIComponent(this.sessionId)}/attach?token=${encodeURIComponent(this.token)}`,
+    // A guest's socket carries no token at all: it terminates on the control
+    // plane, which holds the box's credential itself.
+    if (this.opts.endpoint) {
+      this.open(this.opts.endpoint, mine)
+      return
+    }
+
+    void this.attachUrl().then(
+      url => {
+        // Minting the token is a round trip, and this generation can be
+        // abandoned during it — a tab switched away and back fires
+        // `reconnectNow` again. Without this check the stale promise opens a
+        // second socket onto the same pty, holding a daemon slot and feeding a
+        // listener that discards every byte.
+        if (this.finished || mine !== this.generation) return
+        this.open(url, mine)
+      },
+      () => {
+        if (this.finished || mine !== this.generation) return
+        // A control plane that will not mint a token is the same shape of
+        // problem as a box that will not accept one: wait and try again.
+        this.setStatus("reconnecting")
+        this.scheduleRetry()
+      },
     )
+  }
+
+  /**
+   * Where to attach, with a credential fetched at the last possible moment.
+   *
+   * The token goes in the query string because a browser cannot set headers on
+   * a WebSocket handshake, which means it lands in the box's access log
+   * whatever anyone does. That is survivable *because* of what it now is: two
+   * minutes of permission to attach to a pty, rather than the box's own bearer,
+   * which reads and writes every file on it. Fetching per attempt is the price
+   * of the short lifetime, and one request against a socket that then lives for
+   * hours is not a price worth optimising.
+   */
+  private async attachUrl(): Promise<string> {
+    const token = typeof this.token === "string" ? this.token : await this.token()
+    const session = encodeURIComponent(this.sessionId)
+    return `${this.url}/v1/sessions/${session}/attach?token=${encodeURIComponent(token)}`
+  }
+
+  private open(url: string, mine: number) {
+    const socket = new WebSocket(url)
     socket.binaryType = "arraybuffer"
     this.socket = socket
 

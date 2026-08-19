@@ -13,6 +13,7 @@
 mod files;
 mod proxy;
 mod replay;
+pub mod scope;
 mod session;
 pub mod tls;
 
@@ -203,20 +204,55 @@ pub(crate) struct TokenQuery {
     token: Option<String>,
 }
 
-/// Bearer header or `?token=`. The query form exists because it is the one
-/// thing every websocket client can do; the header is what the real client
-/// uses.
-pub(crate) fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
-    if let Some(t) = q.token.as_deref()
-        && t == app.token.as_str() {
-            return true;
-        }
+/// Whatever credential the request carried, from either place it can be.
+///
+/// The query form exists because it is the one thing every websocket client can
+/// do; the header is what everything else uses.
+fn presented<'a>(headers: &'a HeaderMap, q: &'a TokenQuery) -> Option<&'a str> {
+    if let Some(t) = q.token.as_deref() {
+        return Some(t);
+    }
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| t == app.token.as_str())
-        .unwrap_or(false)
+}
+
+/// Constant time, because `==` on a secret leaks where two values diverge and
+/// this runs on every request. A 32-byte random token is not realistically
+/// recoverable that way over a network, which is the reason this was not
+/// noticed sooner and not a reason to keep it.
+fn same_secret(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// **The box's full credential**, which opens everything this daemon serves: a
+/// shell, every file, a proxy to any port, a forward to any loopback socket.
+///
+/// Only the control plane should ever hold one. Anything a browser is given
+/// goes through `authorized_attach` instead.
+pub(crate) fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
+    presented(headers, q).map(|t| same_secret(t, app.token.as_str())).unwrap_or(false)
+}
+
+/// The full credential, **or** a scoped token that says only "attach to this".
+///
+/// This is the one endpoint with the weaker check, and deliberately: a browser
+/// cannot set a header on a websocket, so whatever admits it to a terminal ends
+/// up in a URL — in the page, in history, in the box's access log. Making that
+/// value expire in two minutes and reach nothing but a pty is the difference
+/// between a leak that costs a terminal session and one that costs the box.
+pub(crate) fn authorized_attach(
+    app: &App,
+    headers: &HeaderMap,
+    q: &TokenQuery,
+    session: &str,
+) -> bool {
+    let Some(t) = presented(headers, q) else {
+        return false;
+    };
+    same_secret(t, app.token.as_str()) || scope::allows_attach(app.token.as_str(), t, session)
 }
 
 async fn create_session(
@@ -396,7 +432,7 @@ async fn attach(
     Path(id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !authorized(&app, &headers, &q) {
+    if !authorized_attach(&app, &headers, &q, &id) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some(session) = app.sessions.read().unwrap().get(&id).cloned() else {

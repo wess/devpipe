@@ -78,8 +78,9 @@ devpipe.com, www.devpipe.com {
 		#
 		# script-src has no 'unsafe-inline'. It used to, for one <script> block
 		# on the lander; that block is /lander.js now precisely so this can say
-		# no. The session token is in localStorage, so an injected script here
-		# is account takeover, and this directive is what stands in the way.
+		# no. The session is an HttpOnly cookie now, so an injected script can
+		# no longer read it — but it can still act as the user for as long as
+		# the page is open, which this directive is what stands in the way of.
 		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://*.devpipe.com https://*.devpipe.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src 'none'"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"

@@ -18,9 +18,11 @@
 export const securityHeaders = (boxDomain: string): Record<string, string> => ({
   "content-security-policy": [
     "default-src 'self'",
-    // No 'unsafe-inline'. The session token lives in localStorage, so an
-    // injected script is account takeover rather than defacement, and this is
-    // the directive standing between the two. Nothing inline is left: the app
+    // No 'unsafe-inline'. The session is an HttpOnly cookie, so an injected
+    // script can no longer read it — but it can still act as the user for as
+    // long as the page is open, and this is the directive standing in the way.
+    // A stolen session is what was removed; a hijacked one is not. Nothing
+    // inline is left: the app
     // bundle is a module file and the lander's script is `site/lander.js` for
     // this reason. 'wasm-unsafe-eval' is for the terminal emulator, and is
     // narrower than the 'unsafe-eval' instantiating WebAssembly would

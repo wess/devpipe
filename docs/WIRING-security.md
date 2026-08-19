@@ -58,15 +58,42 @@ is consulted, so a self-signed certificate can never be rescued by pinning. See
 [spikes.md](spikes.md).
 
 Authentication to a box is `agent_token`, generated per box in
-`src/boxes/index.ts` and known only to that box and the control plane. It
-reaches exactly one machine, belongs to the person who owns it, and is useless
-anywhere else — but it is long-lived, and the browser gets it from
-`/boxes/:id/connection`. Two consequences:
+`src/boxes/index.ts` and known only to that box and the control plane. It opens
+everything `devpiped` serves: a shell, every file under `/v1/fs`, a proxy to any
+listening port, a forward to any loopback socket.
 
-- The web client keeps it in memory, never in `localStorage`.
-- It travels in the websocket query string, because a browser cannot set headers
-  on a handshake, so it lands in that box's access log. That is why it is the
-  box's credential and not the account's.
+**No client ever sees it.** `/boxes/:id/connection` used to answer with it, which
+was defensible when the daemon served terminals and nothing else, and stopped
+being so the moment it grew a file system — a page holding that token could read
+`~/.ssh`, rewrite `~/.bashrc` and spawn a shell, all on the same socket the
+terminal was on. The credential grew; what it was handed to did not.
+
+What a client gets instead is a **scoped attach token**: `<scope>.<expiry>.<sig>`,
+HMAC-SHA256 **keyed by the box token**, minted in `src/util/boxscope.ts` and
+verified in `daemon/src/scope.rs`. Keying it on the box token is what makes the
+scheme free to operate — both sides already hold it, so there is no key to
+distribute and nothing extra to rotate, and rotating a box's token invalidates
+every token minted against it.
+
+- It lasts **two minutes** and reaches **one pty**. `authorized_attach` in
+  `daemon/src/lib.rs` is the only check that accepts one; files, proxy, forward,
+  session create and session delete all still demand the full bearer.
+- It still travels in the websocket query string for the browser, because a
+  browser cannot set headers on a handshake, so it still lands in that box's
+  access log. The difference is what is now in that log. iOS and `dpctl` use
+  `URLSession`/`ureq` and send a header, so nothing appears in a URL there.
+- Because it expires, it cannot be fetched once and kept. Both clients mint one
+  per connection attempt — `attachUrl` in `src/web/terminal/session.ts` and
+  `renew` in `ios/Sources/Net/Daemon.swift`. A terminal reconnects when a tab
+  comes back into view or an app returns to the foreground, which is routinely
+  hours after the first token was issued.
+- `attach:<session>` scopes to a single session, for a credential handed to
+  somebody who is not the owner.
+
+The two implementations are pinned to each other by a shared test vector, in
+`tests/boxscope.test.ts` and `scope.rs`. Change the body format, the digest or
+the encoding on either side and one of the two fails, rather than every terminal
+in production.
 
 ### What is reachable on a box
 
@@ -302,9 +329,11 @@ smaller thing to hand over than one meaning "act as this account".
 
 ## The browser
 
-The session token is in `localStorage`, which makes any injected script an
-account takeover rather than a defacement. The mitigation is that there is
-nowhere to inject from:
+An injected script here can act as the user for as long as the page is open —
+the cookie above rides along on every request it makes. It can no longer *steal*
+the session, and the box credential it would once have found in memory is now a
+two-minute permission to attach to a pty. Both of those cap the damage; neither
+removes it. The mitigation is still that there is nowhere to inject from:
 
 - `script-src 'self' 'wasm-unsafe-eval'` — **no `'unsafe-inline'`**. This is why
   the lander's behaviour lives in `site/lander.js` instead of a `<script>`

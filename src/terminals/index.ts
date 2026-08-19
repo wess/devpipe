@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { ATTACH_TTL, attachAny } from "../util/boxscope.ts"
 import { loginShell } from "../util/shell.ts"
 
 /**
@@ -122,11 +123,20 @@ export const terminalRoutes = (db: Connection) => {
         }
         return json(c, 200, {
           url: `wss://${box.hostname}`,
-          // The box's own bearer. It reaches one box, which belongs to the
-          // person asking, and it is useless anywhere else — but it is
-          // long-lived, so the client must keep it in memory and never in
-          // localStorage where any injected script could read it.
-          token: box.agent_token,
+          // **Not the box's bearer.** This used to be `box.agent_token`, which
+          // opens everything the daemon serves — a shell, every file under
+          // `/v1/fs`, a proxy to any listening port, a forward to any loopback
+          // socket. That was defensible when the daemon only served terminals
+          // and stopped being so the moment it grew a file system.
+          //
+          // A browser cannot set a header on a websocket, so whatever admits it
+          // ends up in a URL: in the page, in `history`, in the box's access
+          // log. This one is worth almost nothing there — two minutes, and a
+          // pty at the end of it.
+          token: attachAny(box.agent_token),
+          // So the client knows to come back for another rather than
+          // discovering the expiry as a failed reconnect an hour later.
+          expiresIn: ATTACH_TTL,
         })
       }),
     ),

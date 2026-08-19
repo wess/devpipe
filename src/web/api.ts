@@ -260,8 +260,7 @@ export const revokePreview = (id: number) => call<{ ok: true }>("DELETE", `/prev
  * it can pass along is this code, which means "admit a browser to preview 41"
  * and nothing else, for sixty seconds.
  */
-export const previewOrigin = (slug: string) =>
-  call<{ url: string; code: string }>("GET", `/previews/${slug}/origin`)
+export const previewOrigin = (slug: string) => call<{ url: string; code: string }>("GET", `/previews/${slug}/origin`)
 
 /**
  * Hands the preview's own origin the code, and takes back a cookie for it.
@@ -361,7 +360,14 @@ export const boxEvents = (id: number, after = 0) =>
     events: { id: number; phase: string; line: string; at: string }[]
   }>("GET", `/boxes/${id}/events?after=${after}`)
 
-export const connection = (id: number) => call<{ url: string; token: string }>("GET", `/boxes/${id}/connection`)
+/**
+ * Where the box is, and a short-lived token that admits a socket to a terminal
+ * on it — scoped to attaching, good for `expiresIn` seconds. Deliberately not
+ * the box's bearer, which reads and writes every file on it. Call it again for
+ * every connection attempt rather than holding the answer.
+ */
+export const connection = (id: number) =>
+  call<{ url: string; token: string; expiresIn: number }>("GET", `/boxes/${id}/connection`)
 
 export type Plan = { size: string; label: string; price_cents: number; monthly: number }
 

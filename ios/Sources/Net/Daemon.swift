@@ -73,9 +73,23 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
     /// go would drop pinning mid-connection.
     private let pinning: PinnedTrust?
 
-    init(config: DaemonConfig, sessionId: String) {
+    /// How to get a fresh attach credential, when there is a control plane to
+    /// ask for one.
+    ///
+    /// What `/boxes/:id/connection` issues is scoped to attaching and lasts two
+    /// minutes — not the box's bearer, which reads and writes every file on it.
+    /// So it cannot be fetched once and kept: reconnecting is what this class
+    /// spends its life doing, and the most common trigger is coming back to the
+    /// app, which is routinely hours later.
+    ///
+    /// Nil for the development harness, which talks to a daemon on this machine
+    /// with a static token and no control plane in the middle.
+    private let renew: (() async -> String?)?
+
+    init(config: DaemonConfig, sessionId: String, renew: (() async -> String?)? = nil) {
         self.config = config
         self.sessionId = sessionId
+        self.renew = renew
         self.pinning = config.insecure ? nil : PinnedTrust(fingerprint: config.fingerprint)
         super.init()
         session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
@@ -137,9 +151,37 @@ final class WebSocketSource: NSObject, ByteSource, URLSessionWebSocketDelegate {
         let mine = generation
 
         onState?(.connecting)
+        guard let renew else {
+            open(with: config.token, generation: mine)
+            return
+        }
+
+        // Minting is a round trip, and this generation can be abandoned during
+        // it — coming back to the foreground fires `reconnectNow` again. The
+        // generation check on the far side is what stops a stale answer opening
+        // a second socket onto the same pty.
+        Task {
+            let token = await renew()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !finished, mine == generation else { return }
+                guard let token else {
+                    // A control plane that will not mint one is the same shape
+                    // of problem as a box that will not accept one: back off
+                    // and try again rather than sitting on a dead socket.
+                    dropped("could not renew the connection", generation: mine)
+                    return
+                }
+                open(with: token, generation: mine)
+            }
+        }
+    }
+
+    /// Unlike the browser, this can set a header — so the credential never goes
+    /// in the URL, and never lands in the box's access log.
+    private func open(with token: String, generation mine: Int) {
         var request = URLRequest(
             url: URL(string: "\(config.wsBase)/v1/sessions/\(sessionId)/attach")!)
-        request.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let task = session.webSocketTask(with: request)
         self.task = task
         task.resume()

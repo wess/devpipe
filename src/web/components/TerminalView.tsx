@@ -36,7 +36,14 @@ const withEsc = (data: Uint8Array): Uint8Array => {
  */
 export const TerminalView: React.FC<{
   url: string
-  token: string
+  /**
+   * The attach credential, or a way to mint one. A function in every real
+   * case: what the control plane issues lasts two minutes, so it has to be
+   * fetched per connection attempt rather than held. Must be stable across
+   * renders — this is in the effect's dependencies, and a fresh closure each
+   * render tears the terminal down and rebuilds it.
+   */
+  token: string | (() => Promise<string>)
   sessionId: string
   fontSize?: number
   onStatus?: (s: string) => void
@@ -49,16 +56,7 @@ export const TerminalView: React.FC<{
   endpoint?: string
   /** Watching somebody else's terminal: no input, no resize, no key bar. */
   readOnly?: boolean
-}> = ({
-  url,
-  token,
-  sessionId,
-  fontSize = DEFAULT_FONT_SIZE,
-  onStatus,
-  onResize,
-  endpoint,
-  readOnly = false,
-}) => {
+}> = ({ url, token, sessionId, fontSize = DEFAULT_FONT_SIZE, onStatus, onResize, endpoint, readOnly = false }) => {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)

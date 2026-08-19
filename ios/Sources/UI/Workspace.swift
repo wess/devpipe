@@ -222,6 +222,14 @@ final class Workspace: ObservableObject {
             let fresh = try await control.connection(box: box.id)
             connection = fresh
             connectedBox = box.id
+            // Every reconnect after the first asks for its own credential. The
+            // one on `fresh` expires in two minutes and a terminal reattaches
+            // whenever the app comes back to the foreground, which is usually
+            // much later than that.
+            let id = box.id
+            sessionStore.renew = { [weak self] in
+                try? await self?.control.connection(box: id).token
+            }
             sessions = try await control.sessions(box: box.id)
             trace("box \(box.name): \(sessions.count) session(s) on \(fresh.url)")
             if selectedSession == nil || !sessions.contains(where: { $0.id == selectedSession }) {

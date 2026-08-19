@@ -400,6 +400,20 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   const boxId = box?.id
   const boxReady = box?.status === "ready"
 
+  /**
+   * A fresh attach token per connection attempt.
+   *
+   * `conn.token` from the effect below is only good for two minutes, and the
+   * terminal reconnects when the tab comes back into view — which is routinely
+   * long after that. Memoised on the box so this is not a new function every
+   * render: `TerminalView` has it in an effect dependency, and an unstable one
+   * would rebuild the emulator and drop the socket on each keystroke.
+   */
+  const attachToken = useCallback(async () => {
+    if (boxId === undefined) throw new Error("no box")
+    return (await api.connection(boxId)).token
+  }, [boxId])
+
   useEffect(() => {
     setConn(null)
     setSessions([])
@@ -696,7 +710,7 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
           ) : conn && activeSession ? (
             <TerminalView
               url={conn.url}
-              token={conn.token}
+              token={attachToken}
               sessionId={activeSession}
               onStatus={setStatus}
               onResize={onTerminalResize}

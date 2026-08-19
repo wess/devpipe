@@ -101,8 +101,18 @@ final class SessionStore: ObservableObject {
     private let limit = 8
     var theme: Theme = .dark
 
+    /// A fresh attach credential for the box currently open, set by the
+    /// workspace that owns this store.
+    ///
+    /// The token on a `Control.Connection` is good for two minutes, and a
+    /// terminal reconnects every time the app comes back to the foreground —
+    /// so what is on the connection is only ever the first one. Everything
+    /// after it comes from here.
+    var renew: (() async -> String?)?
+
     func session(for id: String, connection: Control.Connection) -> LiveSession {
-        session(for: id) {
+        let renew = renew
+        return session(for: id) {
             WebSocketSource(
                 config: DaemonConfig(
                     host: connection.url
@@ -112,7 +122,8 @@ final class SessionStore: ObservableObject {
                     token: connection.token,
                     fingerprint: "",
                     insecure: false),
-                sessionId: id)
+                sessionId: id,
+                renew: renew)
         }
     }
 
