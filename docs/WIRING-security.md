@@ -304,6 +304,26 @@ policy is good and it is still there. It was also the *entire* defence, and one
 inline `<script>` added by somebody in a hurry would have quietly turned every
 injection into a full compromise. A credential JavaScript cannot read fails safe.
 
+**A session is bound to the client that started it.** A stolen token otherwise
+works from anywhere for thirty days and nothing about a request would notice.
+The address is the obvious thing to bind to and the wrong one — a phone changes
+address walking between two rooms — so what is compared is the *client*:
+`src/auth/fingerprint.ts` reduces the user agent to a program and a machine,
+`Chrome/Mac`, with versions deliberately dropped so a browser that updates
+itself every three weeks does not sign its user out every three weeks. A real
+session is held by one program for its whole life; a replayed token is almost
+always presented by a different one.
+
+On a mismatch the row is **deleted**, not merely refused. Once a token has been
+seen in the wrong hands there is nothing left to protect, and leaving it alive
+only lets the holder try again with a better disguise.
+
+An empty `agent_class` is unbound and always passes, but sessions predating the
+column are not left that way: `requireAuth` derives the class from the
+`user_agent` recorded when the row was created, so an old session binds to the
+client that actually made it rather than to whoever presents it next — which
+would hand the binding to whichever party got there first.
+
 iOS and `dpctl` keep sending `Authorization: Bearer`. Each holds its token in a
 keychain no web page can reach, so there is nothing to gain by moving them and a
 working thing to break. `requireAuth` takes either, header first.

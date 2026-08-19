@@ -4,6 +4,7 @@ import type { PipeFn } from "@atlas/server"
 import { assign, halt } from "@atlas/server"
 import { sha256Hex } from "../util/token.ts"
 import { cookieValue, originIsOurs, SESSION_COOKIE } from "./cookie.ts"
+import { agentClass, sameClient } from "./fingerprint.ts"
 
 export type AuthUser = {
   id: number
@@ -70,6 +71,43 @@ export const requireAuth =
     // would have been honoured forever.
     if (new Date(session.expires_at).getTime() < Date.now()) {
       return halt(conn, 401, { error: "That session has expired. Sign in again." })
+    }
+
+    // **The client a session was started from has to be the one still using
+    // it.** A stolen token is otherwise good from anywhere for thirty days, and
+    // nothing else in this function would notice.
+    //
+    // The stored class is filled in from the agent recorded when the row was
+    // created, so sessions predating this column are bound to the client that
+    // actually made them rather than to whoever presents them next — which is
+    // the whole point, and would be exactly backwards if it bound on first use.
+    const presentedClass = agentClass(conn.headers.get("user-agent"))
+    const storedClass: string = session.agent_class || agentClass(session.user_agent)
+    if (!sameClient(storedClass, presentedClass)) {
+      // Ended, not merely refused. If this token is being presented by a client
+      // it was not issued to, the token is out, and leaving it alive so the
+      // holder can try again from a better-disguised agent helps nobody. The
+      // owner signs in again; whoever else has it gets nothing.
+      await opts.db.execute(
+        from("sessions")
+          .where(q => q("id").equals(session.id))
+          .del(),
+      )
+      console.warn(
+        `[devpipe] session ${session.id} was started by ${storedClass || "an unknown client"} and presented by ${presentedClass || "an unknown client"} — ended`,
+      )
+      return halt(conn, 401, { error: "That session was started somewhere else. Sign in again." })
+    }
+    if (!session.agent_class && storedClass) {
+      // Recorded once, so the comparison above is against a stored value from
+      // here on rather than re-derived from the agent string every request.
+      void opts.db
+        .execute(
+          from("sessions")
+            .where(q => q("id").equals(session.id))
+            .update({ agent_class: storedClass }),
+        )
+        .catch(() => {})
     }
 
     const user = (await opts.db.one(from("users").where(q => q("id").equals(session.user_id)))) as any

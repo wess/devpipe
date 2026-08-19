@@ -9,6 +9,7 @@ import { audit } from "../util/audit.ts"
 import { randomToken, sha256Hex } from "../util/token.ts"
 import { checkUsername, isEmail, normaliseUsername } from "../util/username.ts"
 import { clearedCookie, sessionCookie } from "./cookie.ts"
+import { agentClass } from "./fingerprint.ts"
 import { requireAuth } from "./guard.ts"
 
 const SESSION_DAYS = 30
@@ -22,6 +23,10 @@ export const startSession = async (db: Connection, userId: number, conn: any) =>
       user_id: userId,
       token_hash: sha256Hex(token),
       user_agent: (conn.headers.get("user-agent") ?? "").slice(0, 255),
+      // The program and the kind of machine, without versions. Checked on every
+      // request afterwards: a session is held by one client for its whole life,
+      // and a replayed token is almost always presented by a different one.
+      agent_class: agentClass(conn.headers.get("user-agent")),
       // The right-hand end of x-forwarded-for, not the left: Caddy appends the
       // peer it saw, so the left-most entry is whatever the client felt like
       // sending — and this address is what an abuse report gets worked back
