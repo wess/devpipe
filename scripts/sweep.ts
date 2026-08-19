@@ -14,7 +14,7 @@
  * where it is.
  */
 
-import { connect } from "@atlas/db"
+import { connect, from } from "@atlas/db"
 import { deleteRecordById, destroyDroplet, destroyVolume } from "../src/boxes/digitalocean.ts"
 import { findOrphans, orphanSpend } from "../src/boxes/orphans.ts"
 import { CREDENTIAL, getCredential, getSetting, SETTING } from "../src/settings/index.ts"
@@ -42,11 +42,26 @@ if (orphans.length === 0) {
 }
 
 const spend = orphanSpend(orphans)
-console.log(`${orphans.length} unaccounted resource(s), $${spend.toFixed(2)}/mo:\n`)
-for (const o of orphans) {
-  const cost = o.monthly > 0 ? `$${o.monthly.toFixed(2)}/mo` : "no cost"
-  console.log(`  ${o.kind.padEnd(8)} ${o.name}`)
-  console.log(`  ${" ".repeat(8)} ${o.why} — ${cost}`)
+const onProvider = orphans.filter(o => o.where === "provider")
+const inDatabase = orphans.filter(o => o.where === "database")
+
+console.log(`${orphans.length} unaccounted, $${spend.toFixed(2)}/mo\n`)
+if (onProvider.length) {
+  console.log(`Being billed for, with no row behind it:`)
+  for (const o of onProvider) {
+    const cost = o.monthly > 0 ? `$${o.monthly.toFixed(2)}/mo` : "no cost"
+    console.log(`  ${o.kind.padEnd(9)} ${o.name}`)
+    console.log(`  ${" ".repeat(9)} ${o.why} — ${cost}`)
+  }
+}
+if (inDatabase.length) {
+  // Printed apart because the cost is not the reason to care. These break
+  // something rather than bill for it.
+  console.log(`${onProvider.length ? "\n" : ""}Rows naming something the provider no longer has:`)
+  for (const o of inDatabase) {
+    console.log(`  ${o.kind.padEnd(9)} ${o.name}`)
+    console.log(`  ${" ".repeat(9)} ${o.why}`)
+  }
 }
 
 if (!destroy) {
@@ -61,7 +76,17 @@ for (const o of orphans) {
   try {
     if (o.kind === "droplet") await destroyDroplet(token, Number(o.id))
     else if (o.kind === "volume") await destroyVolume(token, o.id)
-    else await deleteRecordById(token, domain, Number(o.id))
+    else if (o.kind === "record") await deleteRecordById(token, domain, Number(o.id))
+    else {
+      // A row, not a resource. Deleting it is only ever right because the
+      // volume it names is already gone — there is nothing left to lose and a
+      // workspace that cannot be mounted is worse than no workspace at all.
+      await db.execute(
+        from("workspaces")
+          .where(q => q("id").equals(Number(o.id)))
+          .delete(),
+      )
+    }
     console.log(`  gone   ${o.kind} ${o.name}`)
   } catch (err: any) {
     // Kept going rather than stopping: one volume that will not detach should

@@ -28,7 +28,18 @@ import * as ocean from "./digitalocean.ts"
  */
 
 export type Orphan = {
-  kind: "droplet" | "volume" | "record"
+  kind: "droplet" | "volume" | "record" | "workspace"
+  /**
+   * Which side the stray is on.
+   *
+   * `provider` is a resource being billed that no row accounts for. `database`
+   * is the mirror image — a row naming a resource that is not there any more,
+   * which costs nothing and breaks something: a workspace whose volume is gone
+   * is offered to the user, chosen, and then fails when a box tries to mount
+   * it. Both are reconciliation failures and they are found the same way, but
+   * only one of them is on the bill.
+   */
+  where: "provider" | "database"
   id: string
   name: string
   /** Dollars a month, as far as it can be known. Records are free. */
@@ -69,6 +80,7 @@ export const findOrphans = async (db: Connection, token: string): Promise<Orphan
     if (claimedDroplets.has(String(d.id))) continue
     found.push({
       kind: "droplet",
+      where: "provider",
       id: String(d.id),
       name: d.name,
       monthly: d.monthly,
@@ -79,7 +91,7 @@ export const findOrphans = async (db: Connection, token: string): Promise<Orphan
   // Workspaces outlive their boxes on purpose — that is the whole feature — so
   // a volume is only an orphan when the *workspace* is gone, not when the box
   // is.
-  const workspaces = (await db.all(from("workspaces").select("volume_id", "name"))) as any[]
+  const workspaces = (await db.all(from("workspaces").select("id", "volume_id", "name"))) as any[]
   const claimedVolumes = new Set(workspaces.map(w => String(w.volume_id)).filter(Boolean))
 
   for (const v of await ocean.listVolumes(token)) {
@@ -90,6 +102,7 @@ export const findOrphans = async (db: Connection, token: string): Promise<Orphan
     if (!v.name.startsWith("dp-")) continue
     found.push({
       kind: "volume",
+      where: "provider",
       id: v.id,
       name: v.name,
       monthly: volumeMonthly(v.sizeGb),
@@ -119,12 +132,32 @@ export const findOrphans = async (db: Connection, token: string): Promise<Orphan
       if (live.has(r.data)) continue
       found.push({
         kind: "record",
+        where: "provider",
         id: String(r.id),
         name: `${r.name}.${domain} → ${r.data}`,
         monthly: 0,
         why: "points at an address this account no longer holds",
       })
     }
+  }
+
+  // The other direction: rows naming things the provider no longer has.
+  //
+  // A workspace is the one that matters. It is the promise that a box is the
+  // disposable half — so a workspace row whose volume has been deleted is worse
+  // than a leak. It shows up in the list when somebody makes a box, gets
+  // chosen, and then fails at mount time, long after the choice was made.
+  const liveVolumes = new Set((await ocean.listVolumes(token)).map(v => String(v.id)))
+  for (const w of workspaces) {
+    if (!w.volume_id || liveVolumes.has(String(w.volume_id))) continue
+    found.push({
+      kind: "workspace",
+      where: "database",
+      id: String(w.id),
+      name: w.name,
+      monthly: 0,
+      why: "its volume no longer exists, so no box can ever mount it",
+    })
   }
 
   return found

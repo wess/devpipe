@@ -194,12 +194,47 @@ describe("dns", () => {
   })
 })
 
+describe("rows naming things that are gone", () => {
+  /**
+   * The mirror image, and the one that costs nothing and breaks something. A
+   * workspace is the promise that the box is the disposable half; a row whose
+   * volume has been deleted is still offered when somebody makes a box, gets
+   * chosen, and fails at mount time long after the choice was made.
+   *
+   * Five of these were found in production — volumes deleted in a cleanup
+   * without the rows that named them.
+   */
+  test("a workspace whose volume was deleted is found", async () => {
+    const users = (await db.execute(
+      from("users").insert({ email: "a@b.co", username: "alfa", password: "x" }).returning("id"),
+    )) as any[]
+    await db.execute(
+      from("workspaces").insert({ user_id: users[0].id, name: "keepsake", volume_id: "gone", size_gb: 10, region: "nyc3" }),
+    )
+    provider({ volumes: [] })
+    const found = await findOrphans(db, "tok")
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ kind: "workspace", where: "database", name: "keepsake", monthly: 0 })
+  })
+
+  test("a workspace whose volume is still there is not", async () => {
+    const users = (await db.execute(
+      from("users").insert({ email: "a@b.co", username: "alfa", password: "x" }).returning("id"),
+    )) as any[]
+    await db.execute(
+      from("workspaces").insert({ user_id: users[0].id, name: "keepsake", volume_id: "v1", size_gb: 10, region: "nyc3" }),
+    )
+    provider({ volumes: [{ id: "v1", name: "dp-1-keepsake-abcd", region: { slug: "nyc3" }, size_gigabytes: 10 }] })
+    expect(await findOrphans(db, "tok")).toHaveLength(0)
+  })
+})
+
 test("the monthly total is the sum, to the cent", () => {
   expect(
     orphanSpend([
-      { kind: "droplet", id: "1", name: "a", monthly: 6, why: "" },
-      { kind: "volume", id: "v", name: "b", monthly: 2.5, why: "" },
-      { kind: "record", id: "9", name: "c", monthly: 0, why: "" },
+      { kind: "droplet", where: "provider", id: "1", name: "a", monthly: 6, why: "" },
+      { kind: "volume", where: "provider", id: "v", name: "b", monthly: 2.5, why: "" },
+      { kind: "record", where: "provider", id: "9", name: "c", monthly: 0, why: "" },
     ]),
   ).toBe(8.5)
 })
