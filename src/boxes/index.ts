@@ -699,15 +699,36 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               }
             }
           }
+
+          // **The row is only forgotten if the droplet is really gone.**
+          //
+          // This used to log the failure and mark the box destroyed anyway,
+          // which is the worst of the available outcomes: the droplet keeps
+          // running and keeps billing, and the one record that pointed at it
+          // has just been erased. Nothing would ever find it again — not the
+          // reclaim sweep, which reads this table, and not the owner, who has
+          // been told it is gone.
+          //
+          // `destroyDroplet` treats a 404 as success, so "somebody already
+          // deleted it in the console" lands here as done rather than as a
+          // failure that can never clear. `sleepBox` has always refused to
+          // proceed on this error; the two now agree.
           try {
             await ocean.destroyDroplet(token, Number(row.provider_id))
           } catch (err) {
-            console.error("destroy failed", err)
+            console.error(`[devpipe] could not destroy ${row.hostname}:`, err)
+            return json(c, 502, {
+              error: `That box could not be destroyed: ${String((err as any)?.message ?? err)}. It is still running, so it has been left in your list to try again.`,
+            })
           }
+
           const domain = await getSetting(db, SETTING.domain)
           try {
             await ocean.deleteRecord(token, domain, row.hostname.replace(`.${domain}`, ""))
           } catch (err) {
+            // A record pointing at an address that is no longer ours is worth
+            // a line in the journal, not worth keeping a destroyed box in
+            // somebody's list over. `sweep` finds these.
             console.error("dns cleanup failed", err)
           }
         }

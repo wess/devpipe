@@ -22,7 +22,17 @@ export type Droplet = {
   createdAt: string
 }
 
-const request = async (token: string, path: string, init: RequestInit = {}) => {
+/**
+ * A delete that has already happened is a delete that succeeded.
+ *
+ * DigitalOcean answers 404 for a droplet, volume or record that is not there,
+ * and the caller of a destroy cannot act on the difference between "gone" and
+ * "was already gone". Treating them apart is worse than useless: a retry after
+ * a partial failure would fail forever on the half that worked.
+ */
+const GONE = { notFoundIsFine: true } as const
+
+const request = async (token: string, path: string, init: RequestInit & { notFoundIsFine?: boolean } = {}) => {
   const res = await fetch(`${API}${path}`, {
     ...init,
     headers: {
@@ -33,6 +43,7 @@ const request = async (token: string, path: string, init: RequestInit = {}) => {
     signal: AbortSignal.timeout(20_000),
   })
   if (res.status === 204) return null
+  if (res.status === 404 && init.notFoundIsFine) return null
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
     const message =
@@ -116,7 +127,7 @@ export const createDroplet = async (
 }
 
 export const destroyDroplet = async (token: string, id: number): Promise<void> => {
-  await request(token, `/droplets/${id}`, { method: "DELETE" })
+  await request(token, `/droplets/${id}`, { method: "DELETE", ...GONE })
 }
 
 /**
@@ -329,7 +340,7 @@ export const deleteRecord = async (token: string, domain: string, name: string):
   const body: any = await request(token, `/domains/${domain}/records?per_page=200&type=A`)
   const existing = (body?.domain_records ?? []).find((r: any) => r.name === name)
   if (existing) {
-    await request(token, `/domains/${domain}/records/${existing.id}`, { method: "DELETE" })
+    await request(token, `/domains/${domain}/records/${existing.id}`, { method: "DELETE", ...GONE })
   }
 }
 
@@ -435,6 +446,25 @@ export const createVolume = async (
   return volume(body.volume)
 }
 
+/** Every volume on the account. Used by the sweep to find ones nothing owns. */
+export const listVolumes = async (token: string): Promise<Volume[]> => {
+  const body: any = await request(token, "/volumes?per_page=200")
+  return (body?.volumes ?? []).map(volume)
+}
+
+export type Record = { id: number; name: string; data: string }
+
+/** Every A record on a domain, which is the only kind a box ever creates. */
+export const listRecords = async (token: string, domain: string): Promise<Record[]> => {
+  const body: any = await request(token, `/domains/${domain}/records?per_page=200&type=A`)
+  return (body?.domain_records ?? []).map((r: any) => ({ id: r.id, name: r.name, data: r.data }))
+}
+
+/** By id, for a record the sweep found rather than one it can name. */
+export const deleteRecordById = async (token: string, domain: string, id: number): Promise<void> => {
+  await request(token, `/domains/${domain}/records/${id}`, { method: "DELETE", ...GONE })
+}
+
 export const getVolume = async (token: string, id: string): Promise<Volume | null> => {
   try {
     const body: any = await request(token, `/volumes/${id}`)
@@ -476,7 +506,7 @@ export const detachVolume = async (token: string, volumeId: string, dropletId: n
 }
 
 export const destroyVolume = async (token: string, volumeId: string): Promise<void> => {
-  await request(token, `/volumes/${volumeId}`, { method: "DELETE" })
+  await request(token, `/volumes/${volumeId}`, { method: "DELETE", ...GONE })
 }
 
 /** Polls one volume action to completion. Gives up rather than hanging. */
