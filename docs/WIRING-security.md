@@ -412,17 +412,18 @@ sign-in happens in the terminal, on the real origin, once.
 
 ## The instance's own credentials
 
-The DigitalOcean token and the Stripe secret key are encrypted at rest with the
-same AES-256-GCM and the same `DEVPIPE_SECRET_KEY` as an agent login. They were
-plaintext, which made them the worst things in the database: the provider token
-creates and destroys every droplet on the account, detaches volumes and spends
-money with no ceiling, and nightly backups of that table are rsynced off the
-database host — so "readable with a `psql` session" understated it.
+The DigitalOcean token is encrypted at rest with the same AES-256-GCM and the
+same `DEVPIPE_SECRET_KEY` as an agent login. It was plaintext, which made it the
+worst thing in the database: it creates and destroys every droplet on the
+account, detaches volumes and spends money with no ceiling, and nightly backups
+of that table are rsynced off the database host — so "readable with a `psql`
+session" understated it.
 
-Each is bound to its own row with `credential:<key>` as additional authenticated
+It is bound to its own row with `credential:<key>` as additional authenticated
 data. Encryption stops a value being read; only binding stops it being *moved* —
-without it, the Stripe key could be copied into the provider row and the
-instance would decrypt it happily and hand it to DigitalOcean.
+without it, any other sealed value in that table could be copied into the
+provider row and the instance would decrypt it happily and hand it to
+DigitalOcean.
 
 Two deliberate differences from agent logins:
 

@@ -3,7 +3,8 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
-import { ATTACH_TTL, attachAny } from "../util/boxscope.ts"
+import { boxEndpoint, boxSocketEndpoint } from "../providers/endpoint.ts"
+import { ATTACH, ATTACH_TTL, attachAny, verifyForBox } from "../util/boxscope.ts"
 import { loginShell } from "../util/shell.ts"
 
 /**
@@ -60,7 +61,7 @@ class BoxRefused extends Error {
 }
 
 const callBox = async (box: any, path: string, init: RequestInit = {}) => {
-  const res = await fetch(`https://${box.hostname}${path}`, {
+  const res = await fetch(`${boxEndpoint(box)}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${box.agent_token}`,
@@ -106,7 +107,36 @@ const notAnswering = (c: Conn, box: { hostname: string }, path: string, err: unk
   return json(c, 502, { error: "That box is not answering." })
 }
 
-export const terminalRoutes = (db: Connection) => {
+/**
+ * Relays owner sockets for backends whose daemon endpoint is private to the
+ * control-plane host. Public VM backends keep the lower-latency direct path.
+ */
+export const terminalSocket = (db: Connection) => async (req: Request) => {
+  if ((req.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") return null
+  const url = new URL(req.url)
+  const match = /\/boxes\/(\d+)\/socket(\/v1\/sessions\/([^/]+)\/attach)$/.exec(url.pathname)
+  if (!match?.[1] || !match[2] || !match[3]) return null
+
+  const box = (await db.one(
+    from("boxes")
+      .where(q => q("id").equals(Number(match[1])))
+      .where(q => q("destroyed_at").isNull()),
+  )) as any
+  if (!box || box.status !== "ready" || !box.endpoint) return null
+
+  const token = String(url.searchParams.get("token") ?? "")
+  const scope = verifyForBox(box.agent_token, token)
+  const session = decodeURIComponent(match[3])
+  if (scope !== ATTACH && scope !== `${ATTACH}:${session}`) return null
+
+  return {
+    url: `${boxSocketEndpoint(box)}${match[2]}?token=${encodeURIComponent(token)}`,
+    protocol: null as string | null,
+    readOnly: false,
+  }
+}
+
+export const terminalRoutes = (db: Connection, appUrl = "") => {
   const authed = pipeline(requireAuth({ db }))
   const authedJson = pipeline(requireAuth({ db }), parseJson)
 
@@ -121,8 +151,11 @@ export const terminalRoutes = (db: Connection) => {
         if (box.status !== "ready") {
           return json(c, 409, { error: "That box is still being set up." })
         }
+        const direct = !box.endpoint
         return json(c, 200, {
-          url: `wss://${box.hostname}`,
+          url: direct
+            ? boxSocketEndpoint(box)
+            : `${(appUrl || new URL(c.request.url).origin).replace(/\/$/, "")}/api/boxes/${box.id}/socket`,
           // **Not the box's bearer.** This used to be `box.agent_token`, which
           // opens everything the daemon serves — a shell, every file under
           // `/v1/fs`, a proxy to any listening port, a forward to any loopback

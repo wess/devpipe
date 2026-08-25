@@ -2,19 +2,32 @@ import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
-import { attachSubscription, releaseSubscription, requireSubscriptionForBox } from "../billing/index.ts"
+import { atLeast } from "../auth/roles.ts"
+import {
+  beginOperation,
+  type MachineOperation,
+  operationFailed,
+  operationRetry,
+  operationStep,
+  operationSucceeded,
+  unfinishedOperations,
+} from "../machine/operations.ts"
+import { activeProvider, ProviderUnavailable, requireProvider } from "../providers/index.ts"
+import type { Machine, MachineProvider } from "../providers/types.ts"
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
+import { getSetting, SETTING } from "../settings/index.ts"
 import { retireSharing } from "../shares/retire.ts"
-import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
+import { withinCap } from "../spend/index.ts"
+import { startMetering, startWorkspaceMetering, stopMetering } from "../spend/meter.ts"
 import { audit } from "../util/audit.ts"
 import { open, seal, secretsAvailable } from "../util/secretbox.ts"
 import { isShell, SHELLS, type ShellName } from "../util/shell.ts"
 import { randomToken, shortId } from "../util/token.ts"
 import { rotateVaultToken } from "../vault/box.ts"
 import { claimForBox } from "../workspaces/index.ts"
-import { CATALOG, defaults, fits, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
+import { CATALOG, defaults, fits, memoryFor, REGIONS, resolve, SIZES, SYNAPSE_FILES } from "./catalog.ts"
 import { cloudInit } from "./cloudinit.ts"
-import * as ocean from "./digitalocean.ts"
+import { costCentsPerHour, gpuImageFor, gpuSizeFor, gpuSizes, isGpuSize, regionNames } from "./gpu.ts"
 import { ASLEEP, sleepBox } from "./reclaim.ts"
 
 const publicBox = (row: any) => ({
@@ -32,6 +45,7 @@ const publicBox = (row: any) => ({
   tools: safeTools(row.manifest),
   created_at: row.created_at,
   ready_at: row.ready_at,
+  provider: row.provider,
 })
 
 const safeTools = (manifest: string): string[] => {
@@ -55,10 +69,10 @@ const safeTools = (manifest: string): string[] => {
  * nothing has no boxes to protect and should not log about it hourly.
  */
 export const convergeFirewall = async (db: Connection): Promise<boolean> => {
-  const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-  if (!token) return false
   try {
-    await ocean.ensureBoxFirewall(token, ocean.BOX_TAG, await sshSources(db))
+    const provider = activeProvider()
+    if (!(await provider.configured(db)) || !provider.network) return false
+    await provider.network.converge(db, await sshSources(db))
     return true
   } catch (err) {
     console.error("[devpipe] could not converge the box firewall:", err)
@@ -95,7 +109,9 @@ const sshSources = async (db: Connection): Promise<string[]> =>
 export const provision = async (
   db: Connection,
   opts: {
-    token: string
+    provider: MachineProvider
+    operationKind: "provision" | "wake"
+    idempotencyKey: string
     appUrl: string
     boxId: number
     userId: number
@@ -117,17 +133,35 @@ export const provision = async (
     vaultToken: string
     workspace: any | null
   },
-): Promise<number> => {
+): Promise<string> => {
+  const operation = await beginOperation(db, {
+    idempotencyKey: opts.idempotencyKey,
+    provider: opts.provider.kind,
+    kind: opts.operationKind,
+    boxId: opts.boxId,
+    workspaceId: opts.workspace?.id ?? null,
+    payload: { domain: opts.domain, host: opts.host },
+  })
+
   // Before the droplet, not after: the firewall is attached by tag, so it has
   // to exist by the time a droplet carrying that tag does. Creating the box
   // first would leave it briefly reachable on every port while cloud-init runs
   // as root — which is the window an opportunistic scanner is looking for.
-  await ocean.ensureBoxFirewall(opts.token, ocean.BOX_TAG, await sshSources(db))
+  if (opts.provider.network) await opts.provider.network.converge(db, await sshSources(db))
+
+  // A GPU box boots the provider's AI/ML-ready image instead of anything of
+  // ours. The prebaked snapshot is Debian with no driver stack, and a card the
+  // driver cannot see is hardware somebody is paying four dollars an hour for
+  // and cannot use. There is deliberately no fallback for these: a GPU box that
+  // quietly came up without CUDA is worse than one that failed to come up.
+  const gpu = opts.provider.capabilities.gpu && isGpuSize(opts.size) ? await gpuSizeFor(db, opts.size) : null
+  const gpuImage = gpu ? gpuImageFor(gpu) : ""
 
   // The prebaked image, when there is one. Empty falls through to the
   // provider's base image and a full install on first boot — slower, but a
   // snapshot somebody deleted must not stop boxes being made.
-  const boxImage = (await getSetting(db, SETTING.boxImage)).trim()
+  const boxImage =
+    gpu || opts.provider.capabilities.managedBootstrap ? "" : (await getSetting(db, SETTING.boxImage)).trim()
   const preinstalled = boxImage
     ? (await getSetting(db, SETTING.boxImageTools))
         .split(",")
@@ -154,11 +188,12 @@ export const provision = async (
    * missing everything the snapshot was supposed to provide.
    */
   const create = (useImage: boolean) =>
-    ocean.createDroplet(opts.token, {
+    opts.provider.compute.create(db, {
+      operationId: operation.id,
       name: opts.hostname,
       region: opts.region,
       size: opts.size,
-      ...(useImage && boxImage ? { image: boxImage } : {}),
+      ...(gpuImage ? { image: gpuImage } : useImage && boxImage ? { image: boxImage } : {}),
       userData: cloudInit({
         preinstalled: useImage ? preinstalled : [],
         hostname: opts.hostname,
@@ -180,13 +215,23 @@ export const provision = async (
         // disposable half.
         volumeName: opts.workspace?.volume_name,
       }),
+      agentToken: opts.agentToken,
+      workspace: opts.workspace
+        ? {
+            id: String(opts.workspace.volume_id),
+            name: String(opts.workspace.volume_name),
+            region: String(opts.workspace.region),
+            sizeGb: Number(opts.workspace.size_gb),
+            machineIds: [],
+          }
+        : null,
       // Without a key nobody can get onto a box that wedges during setup — the
       // first real provisioning run hung and there was no way to look at it.
       sshKeyIds,
       // `devpipe` for inventory, `devpipe-box` for the firewall: the control
       // plane wears the first, so rules hung on it reach a machine that is not
       // a box.
-      tags: ["devpipe", ocean.BOX_TAG, `user-${opts.userId}`],
+      tags: ["devpipe", "devpipe-box", `user-${opts.userId}`],
     })
 
   /**
@@ -200,47 +245,96 @@ export const provision = async (
    * never a box they could not create at all, so the failure falls back to the
    * base image and installs the tools the long way.
    */
-  let droplet
+  let machine: Machine | null = null
   try {
-    droplet = await create(true)
+    await operationStep(db, operation, "creating-machine")
+    machine = await create(true)
   } catch (err) {
-    if (!boxImage) throw err
-    console.error(`[devpipe] the prebaked image would not boot ${opts.size}, building from base:`, err)
-    droplet = await create(false)
+    try {
+      machine = await opts.provider.compute.findByOperation(db, operation.id)
+    } catch (lookupError) {
+      await operationRetry(db, operation.id, "create-uncertain", lookupError)
+      throw err
+    }
+    if (machine) {
+      // The provider accepted the create and the response was lost. Continue
+      // with the tagged resource instead of creating a second one.
+    } else {
+      // A GPU box has nowhere to fall back to — see `gpuImage` above.
+      if (!boxImage || gpu) {
+        await operationFailed(db, operation.id, err)
+        throw err
+      }
+      console.error(`[devpipe] the prebaked image would not boot ${opts.size}, building from base:`, err)
+      try {
+        machine = await create(false)
+      } catch (fallbackError) {
+        try {
+          machine = await opts.provider.compute.findByOperation(db, operation.id)
+        } catch (lookupError) {
+          await operationRetry(db, operation.id, "fallback-create-uncertain", lookupError)
+          throw fallbackError
+        }
+        if (!machine) {
+          await operationFailed(db, operation.id, fallbackError)
+          throw fallbackError
+        }
+      }
+    }
   }
 
-  await db.execute(
-    from("boxes")
-      .where(q => q("id").equals(opts.boxId))
-      .update({ provider_id: String(droplet.id), status: "installing", last_active_at: new Date() }),
-  )
+  try {
+    await operationStep(db, operation, "machine-created", machine.id)
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(opts.boxId))
+        .update({
+          provider: opts.provider.kind,
+          provider_id: machine.id,
+          endpoint: machine.endpoint,
+          status: "installing",
+          last_active_at: new Date(),
+        }),
+    )
 
-  // The workspace, on its way while cloud-init installs.
-  //
-  // Started here but not waited for. Attaching takes tens of seconds and this
-  // is the request the wizard is blocked on, so awaiting it holds the dialog on
-  // "Creating…" for the whole attach. Nothing races: the mount is near the end
-  // of cloud-init, behind an apt run, and the script waits a further minute for
-  // the device before giving up.
-  if (opts.workspace) {
-    void ocean.attachVolume(opts.token, opts.workspace.volume_id, droplet.id).catch(async err => {
-      console.error("[devpipe] could not attach a workspace:", err)
-      // Said on the box rather than swallowed. A box that quietly has no
-      // workspace looks exactly like a workspace with nothing in it, which is
-      // how somebody concludes their files are gone.
-      await db.execute(
-        from("boxes")
-          .where(q => q("id").equals(opts.boxId))
-          .update({ workspace_id: null, status_detail: "the workspace could not be attached" }),
-      )
-    })
+    // The clock starts here, not when the box says it is ready. The provider
+    // charges for a machine from the moment it exists. Docker is local and has
+    // no provider rate, so its recorded cost is zero.
+    await startMetering(
+      db,
+      opts.boxId,
+      opts.provider.kind === "digitalocean" ? await costCentsPerHour(db, opts.size) : 0,
+    )
+  } catch (err) {
+    // The provider call succeeded and the database did not. Findable by the
+    // operation tag, and removed here rather than left as invisible spend.
+    try {
+      await opts.provider.compute.release(db, {
+        machineId: machine.id,
+        workspaceId: opts.workspace?.volume_id ?? null,
+        preserveWorkspace: Boolean(opts.workspace),
+      })
+      await operationFailed(db, operation.id, err)
+    } catch (cleanupError) {
+      await operationRetry(db, operation.id, "cleanup-needed", cleanupError)
+      console.error("[devpipe] could not clean up a failed provision:", cleanupError)
+    }
+    throw err
   }
 
-  // DNS is what makes the certificate possible, so it happens as soon as there
-  // is an address to point at — before the box has finished installing, because
-  // Caddy will want it the moment it starts.
-  void settleAddress(db, opts.token, opts.boxId, droplet.id, opts.domain, opts.host)
-  return droplet.id
+  // The slow half is detached from the request, but not from durable state.
+  // `resumeProvisioning` picks the operation back up after an API restart.
+  void finishProvisioning(
+    db,
+    opts.provider,
+    operation,
+    opts.boxId,
+    machine.id,
+    opts.workspace,
+    opts.domain,
+    opts.host,
+  ).catch(err => console.error(`[devpipe] could not finish provisioning ${opts.hostname}:`, err))
+  return machine.id
 }
 
 /**
@@ -253,7 +347,7 @@ export const provision = async (
  */
 const grantWorkspace = async (
   db: Connection,
-  token: string,
+  provider: MachineProvider,
   userId: number,
   region: string,
   sizeGb: number,
@@ -266,7 +360,15 @@ const grantWorkspace = async (
       .slice(0, 24) || "box"
   const name = `${base}-files`
   const volumeName = `dp-${userId}-${name}-${shortId(4)}`.slice(0, 60)
-  const volume = await ocean.createVolume(token, { name: volumeName, region, sizeGb })
+  if (!provider.workspaces) throw new Error(`${provider.label} does not support persistent workspaces.`)
+  const operation = await beginOperation(db, {
+    idempotencyKey: `workspace.grant:${userId}:${volumeName}`,
+    provider: provider.kind,
+    kind: "workspace.create",
+  })
+  await operationStep(db, operation, "creating-workspace")
+  const volume = await provider.workspaces.create(db, { name: volumeName, region, sizeGb })
+  await operationStep(db, operation, "workspace-created", volume.id)
   const rows = (await db.execute(
     from("workspaces")
       .insert({
@@ -274,11 +376,14 @@ const grantWorkspace = async (
         name,
         region,
         size_gb: sizeGb,
+        provider: provider.kind,
         volume_id: volume.id,
         volume_name: volume.name || volumeName,
       })
       .returning("id", "name", "region", "size_gb", "volume_id", "volume_name"),
   )) as any[]
+  await operationSucceeded(db, operation.id)
+  await startWorkspaceMetering(db, rows[0].id, provider.kind === "digitalocean" ? undefined : 0)
   await audit(db, userId, "workspace.granted", `${name} ${sizeGb}GB with ${boxName}`)
   return rows[0]
 }
@@ -313,17 +418,59 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
     // web and iOS cannot drift apart on what a box can be built with.
     get(
       "/boxes/catalog",
-      authed(async c =>
-        json(c, 200, {
+      authed(async c => {
+        const provider = activeProvider()
+        const providerCatalog = provider.catalog ? await provider.catalog(db) : null
+        if (providerCatalog) {
+          const tools = providerCatalog.toolIds
+            ? CATALOG.filter(tool => providerCatalog.toolIds?.includes(tool.id))
+            : CATALOG
+          return json(c, 200, {
+            tools: tools.map(({ install, credentials, ...rest }) => rest),
+            sizes: providerCatalog.sizes,
+            gpu_sizes: [],
+            regions: providerCatalog.regions,
+            defaults: providerCatalog.defaultTools ?? defaults(),
+            provider: provider.kind,
+          })
+        }
+        // Read from the provider, so the cards on offer and what they cost are
+        // whatever is true today rather than whatever was true when this was
+        // written. Empty when GPU is switched off, when the provider cannot be
+        // reached, or when the account has none available — three states the
+        // wizard treats the same way, because in all three the honest answer
+        // to "can I have a GPU box" is no.
+        const gpu = await gpuSizes(db)
+        // GPU cards live in datacentres the CPU catalogue never mentions, so
+        // the static region list cannot name them.
+        const named = gpu.length > 0 ? await regionNames(db) : {}
+        const extra = [...new Set(gpu.flatMap(g => g.regions))]
+          .filter(slug => !REGIONS.some(r => r.slug === slug))
+          .map(slug => ({ slug, label: named[slug] ?? slug }))
+
+        return json(c, 200, {
           // `install` and `credentials` are stripped: one is a shell command
           // the client has no business running, the other is a list of file
           // paths that only the box and the sync path need to know.
           tools: CATALOG.map(({ install, credentials, ...rest }) => rest),
           sizes: SIZES,
-          regions: REGIONS,
+          gpu_sizes: gpu.map(g => ({
+            slug: g.slug,
+            label: g.label,
+            memory_mb: g.memoryMb,
+            vcpus: g.vcpus,
+            disk_gb: g.diskGb,
+            vram_gb: g.vramGb,
+            count: g.count,
+            vendor: g.vendor,
+            cents_per_hour: g.centsPerHour,
+            regions: g.regions,
+          })),
+          regions: [...REGIONS, ...extra],
           defaults: defaults(),
-        }),
-      ),
+          provider: provider.kind,
+        })
+      }),
     ),
 
     get(
@@ -368,10 +515,13 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           workspace_id?: number
         }
 
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-        if (!token) {
+        let provider: MachineProvider
+        try {
+          provider = await requireProvider(db)
+        } catch (err) {
+          if (!(err instanceof ProviderUnavailable)) throw err
           return json(c, 503, {
-            error: "No provider is configured yet. The instance owner needs to add one.",
+            error: `${err.message} The instance owner needs to configure it.`,
           })
         }
 
@@ -387,14 +537,45 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         }
 
         const name = (b.name ?? "").trim().slice(0, 40) || "box"
-        const region = REGIONS.find(r => r.slug === b.region)?.slug ?? (await getSetting(db, SETTING.defaultRegion))
-        const size = SIZES.find(s => s.slug === b.size)?.slug ?? (await getSetting(db, SETTING.defaultSize))
+
+        // A GPU size is not in the static catalogue — it is read from the
+        // provider, because the cards on offer and their hourly price both
+        // move. A slug that looks like one and is not in that list is refused
+        // rather than falling through to the default size: somebody asking for
+        // an H100 must not silently get a 512 MB box.
+        const providerCatalog = provider.catalog ? await provider.catalog(db) : null
+        const wantsGpu = provider.capabilities.gpu && isGpuSize(String(b.size ?? ""))
+        const gpu = wantsGpu ? await gpuSizeFor(db, String(b.size)) : null
+        if (wantsGpu && !gpu) {
+          return json(c, 422, { error: "That GPU size is not available. Pick one from the catalogue." })
+        }
+
+        // GPU cards live in a handful of datacentres, and not the ones the CPU
+        // catalogue lists. The choice is honoured when the card is there and
+        // moved when it is not — a create that fails at the provider because a
+        // region was left at its default is a worse way to learn this.
+        const region = providerCatalog
+          ? (providerCatalog.regions.find(r => r.slug === b.region)?.slug ?? providerCatalog.defaults.region)
+          : gpu
+            ? (gpu.regions.find(r => r === b.region) ?? gpu.regions[0])
+            : (REGIONS.find(r => r.slug === b.region)?.slug ?? (await getSetting(db, SETTING.defaultRegion)))
+        const size = providerCatalog
+          ? (providerCatalog.sizes.find(s => s.slug === b.size)?.slug ?? providerCatalog.defaults.size)
+          : (gpu?.slug ?? SIZES.find(s => s.slug === b.size)?.slug ?? (await getSetting(db, SETTING.defaultSize)))
         const shell = isShell(String(b.shell ?? "")) ? String(b.shell) : "bash"
         // The shell is a tool as far as the build is concerned. Choosing zsh
         // and not installing it leaves an account whose login shell does not
         // exist, so the selection carries its own package rather than trusting
         // the client to have ticked the right box.
-        const wanted = [...(b.tools ?? defaults())]
+        const wanted = [...(b.tools ?? providerCatalog?.defaultTools ?? defaults())]
+        const unsupported = providerCatalog?.toolIds
+          ? wanted.filter(tool => !providerCatalog.toolIds?.includes(tool))
+          : []
+        if (unsupported.length > 0) {
+          return json(c, 422, {
+            error: `${provider.label} does not provide: ${unsupported.join(", ")}. Pick from its catalogue.`,
+          })
+        }
         const shellTool = SHELLS[shell as ShellName].tool
         if (shellTool && !wanted.includes(shellTool)) wanted.push(shellTool)
         const tools = resolve(wanted).map(t => t.id)
@@ -408,26 +589,49 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // can act on, and finding out after a machine exists is worse.
         let workspace: any = null
         if (b.workspace_id) {
-          const claim = await claimForBox(db, me.id, Number(b.workspace_id), region)
+          const claim = await claimForBox(db, me.id, Number(b.workspace_id), region, undefined, provider.kind)
           if (!claim.ok) return json(c, 409, { error: claim.reason })
           workspace = claim.workspace
         }
 
-        const gate = await requireSubscriptionForBox(db, me.id, size, Boolean(me.is_owner))
-        if (!gate.ok) return json(c, 402, { error: gate.reason })
+        // The instance's own ceiling, checked before anybody's entitlement to
+        // a box. Somebody may have paid for this and it still cannot be built:
+        // the cap is about what the machine costs the person whose provider
+        // account it lands on, and past it nothing new starts at all.
+        const room = await withinCap(db, provider.kind === "digitalocean" ? await costCentsPerHour(db, size) : 0)
+        if (!room.ok) return json(c, 409, { error: room.reason })
 
-        // A box nobody is paying for, with nowhere to keep its work.
+        // A GPU box is an admin's decision, not a member's.
         //
-        // Given a small workspace rather than none, because reclaim only ever
-        // touches boxes carrying one — a box without a workspace holds the only
-        // copy of what is on it. Left alone, the boxes nobody pays for would be
-        // the only ones that could never be put to sleep, which is exactly the
-        // wrong way round. A gigabyte is the smallest a volume can be and costs
-        // about ten cents a month.
-        if (!workspace && !gate.subscriptionId) {
+        // Nothing is charged to anybody here — the bill lands on whoever
+        // installed this — and the cheapest card is a hundred times the hourly
+        // cost of the cheapest ordinary box. The instance cap bounds the
+        // damage and the idle sweep shortens it, but neither is a reason to
+        // let anybody with an account spend four dollars an hour of somebody
+        // else's money without being trusted with anything else.
+        if (gpu && !atLeast(me.role, "admin")) {
+          return json(c, 403, { error: "GPU boxes are for admins on this instance. Ask whoever runs it." })
+        }
+
+        // A box with nowhere to keep its work.
+        //
+        // Given a small workspace rather than none, because every sweep here
+        // only ever touches boxes carrying one — a box without a workspace
+        // holds the only copy of what is on it, so it can never be put to
+        // sleep, which is exactly backwards for the machines nobody is
+        // watching. A gigabyte is the smallest a volume can be and costs about
+        // ten cents a month.
+        if (!workspace) {
+          // A GPU box is never allowed to go without one. The idle sweep only
+          // ever touches boxes carrying a workspace — that rule is what makes
+          // sleeping a machine safe rather than destructive — so a GPU box
+          // without one is a four-dollar-an-hour machine that can never be put
+          // down automatically. Ten gigabytes rather than the free tier's one:
+          // a checkpoint is not a dotfile.
           const freeGb = Number(await getSetting(db, SETTING.freeWorkspaceGb))
-          if (Number.isFinite(freeGb) && freeGb > 0) {
-            workspace = await grantWorkspace(db, token, me.id, region, freeGb, name).catch(err => {
+          const gb = gpu ? Math.max(10, Number.isFinite(freeGb) ? freeGb : 0) : freeGb
+          if (Number.isFinite(gb) && gb > 0) {
+            workspace = await grantWorkspace(db, provider, me.id, region, gb, name).catch(err => {
               // Not fatal. A box with no workspace is worse than one with, and
               // far better than no box at all because a volume could not be
               // made — it simply never sleeps.
@@ -435,15 +639,28 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               return null
             })
           }
+          if (gpu && !workspace) {
+            return json(c, 502, {
+              error: "A GPU box needs a workspace and one could not be created. Try again in a moment.",
+            })
+          }
         }
 
         // Refuse a build that would be killed by the OOM killer later. The
         // failure it prevents looks like a random disconnect mid-task, which
         // is far harder to diagnose than being told no now.
-        const room = fits(tools, size)
-        if (!room.ok) {
+        // Only a question for the CPU sizes. The smallest GPU box has 32 GB of
+        // memory, which is more than the whole catalogue asks for put together.
+        const providerSize = providerCatalog?.sizes.find(item => item.slug === size)
+        const providerNeeded = memoryFor(tools) + 140
+        const memory = gpu
+          ? { ok: true, needed: 0, available: gpu.memoryMb }
+          : providerSize
+            ? { ok: providerNeeded <= providerSize.memoryMb, needed: providerNeeded, available: providerSize.memoryMb }
+            : fits(tools, size)
+        if (!memory.ok) {
           return json(c, 422, {
-            error: `That selection needs about ${room.needed} MB and this size has ${room.available} MB. Pick a larger box or fewer tools.`,
+            error: `That selection needs about ${memory.needed} MB and this size has ${memory.available} MB. Pick a larger box or fewer tools.`,
           })
         }
 
@@ -458,6 +675,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               user_id: me.id,
               name,
               hostname,
+              provider: provider.kind,
               shell,
               synapse: b.synapse ? 1 : 0,
               workspace_id: workspace?.id ?? null,
@@ -471,22 +689,11 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         )) as any[]
         const boxId = rows[0].id
 
-        // Claimed the moment the row exists. Two requests can pass the gate on
-        // the same free subscription before either attaches, and the one that
-        // loses must not end up with a box. Deleted rather than marked failed:
-        // nothing has been provisioned, so there is nothing to look at after.
-        if (gate.subscriptionId && !(await attachSubscription(db, gate.subscriptionId, boxId))) {
-          await db.execute(
-            from("boxes")
-              .where(q => q("id").equals(boxId))
-              .del(),
-          )
-          return json(c, 402, { error: "That subscription is already covering another box." })
-        }
-
         try {
           await provision(db, {
-            token,
+            provider,
+            operationKind: "provision",
+            idempotencyKey: `provision:${boxId}`,
             appUrl,
             boxId,
             userId: me.id,
@@ -514,8 +721,10 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               .where(q => q("id").equals(boxId))
               .update({ status: "failed", status_detail: String(err?.message ?? err).slice(0, 200) }),
           )
-          // A box that never came up must not hold a subscription hostage.
-          await releaseSubscription(db, boxId)
+          // The clock only started if a droplet actually existed, so what this
+          // counts is the minutes that machine was alive — and then it stops,
+          // rather than running forever against a box nobody can use.
+          await stopMetering(db, boxId)
           return json(c, 502, { error: String(err?.message ?? "Could not create that box.") })
         }
       }),
@@ -576,6 +785,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
             userId: row.user_id,
             name: row.name,
             hostname: row.hostname,
+            provider: row.provider,
             providerId: String(row.provider_id),
             workspaceId: Number(row.workspace_id),
             idleHours: 0,
@@ -607,8 +817,29 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
           return json(c, 409, { error: "That box is already awake." })
         }
 
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-        if (!token) return json(c, 503, { error: "No provider is configured yet." })
+        let provider: MachineProvider
+        try {
+          provider = await requireProvider(db, row.provider)
+        } catch (err) {
+          if (!(err instanceof ProviderUnavailable)) throw err
+          return json(c, 503, { error: err.message })
+        }
+
+        // Waking is starting a machine, so the instance's ceiling applies
+        // exactly as it does to creating one.
+        const rate =
+          row.cost_cents === null || row.cost_cents === undefined
+            ? provider.kind === "digitalocean"
+              ? await costCentsPerHour(db, row.size)
+              : 0
+            : Number(row.cost_cents) || 0
+        const room = await withinCap(db, rate)
+        if (!room.ok) return json(c, 409, { error: room.reason })
+
+        // Waking a GPU box is starting one, so it asks what creating one did.
+        if (isGpuSize(row.size) && !atLeast(me.role, "admin")) {
+          return json(c, 403, { error: "GPU boxes are for admins on this instance. Ask whoever runs it." })
+        }
 
         // The workspace has to still be free. It is normally still attached to
         // nothing, but somebody can have given it to another box while this one
@@ -621,7 +852,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         // box asking. Every slept box was unwakeable.
         let workspace: any = null
         if (row.workspace_id) {
-          const claim = await claimForBox(db, me.id, row.workspace_id, row.region, row.id)
+          const claim = await claimForBox(db, me.id, row.workspace_id, row.region, row.id, provider.kind)
           if (!claim.ok) return json(c, 409, { error: claim.reason })
           workspace = claim.workspace
         }
@@ -634,7 +865,9 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         )
         try {
           await provision(db, {
-            token,
+            provider,
+            operationKind: "wake",
+            idempotencyKey: `wake:${row.id}:${Date.now()}`,
             appUrl,
             boxId: row.id,
             userId: me.id,
@@ -666,6 +899,9 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
               .where(q => q("id").equals(row.id))
               .update({ status: ASLEEP, status_detail: String(err?.message ?? "could not wake").slice(0, 200) }),
           )
+          // And a wake that did not take is not an hour anybody owes for
+          // beyond the minutes a droplet was actually up.
+          await stopMetering(db, row.id)
           return json(c, 502, { error: String(err?.message ?? "Could not wake that box.") })
         }
       }),
@@ -682,68 +918,67 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
         )) as any
         if (!row) return json(c, 404, { error: "No such box." })
 
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-        if (token && row.provider_id) {
-          // Detach first, and wait. A volume still attached to a droplet that
-          // no longer exists is not freed by the droplet going away: it keeps
-          // being charged for, belongs to nothing, and cannot be attached
-          // anywhere else. The whole promise of a workspace is that the box is
-          // the disposable half, so this is the step that has to be right.
-          if (row.workspace_id) {
-            const workspace = (await db.one(from("workspaces").where(q => q("id").equals(row.workspace_id)))) as any
-            if (workspace) {
-              try {
-                await ocean.detachVolume(token, workspace.volume_id, Number(row.provider_id))
-              } catch (err) {
-                console.error("[devpipe] could not detach a workspace before destroy:", err)
-              }
-            }
+        let releaseOperation: MachineOperation | null = null
+        if (row.provider_id) {
+          let provider: MachineProvider
+          try {
+            provider = await requireProvider(db, row.provider)
+          } catch (err) {
+            if (!(err instanceof ProviderUnavailable)) throw err
+            return json(c, 503, {
+              error: `${err.message} The provider resource has not been changed, so this box is still in your list.`,
+            })
           }
 
-          // **The row is only forgotten if the droplet is really gone.**
-          //
-          // This used to log the failure and mark the box destroyed anyway,
-          // which is the worst of the available outcomes: the droplet keeps
-          // running and keeps billing, and the one record that pointed at it
-          // has just been erased. Nothing would ever find it again — not the
-          // reclaim sweep, which reads this table, and not the owner, who has
-          // been told it is gone.
-          //
-          // `destroyDroplet` treats a 404 as success, so "somebody already
-          // deleted it in the console" lands here as done rather than as a
-          // failure that can never clear. `sleepBox` has always refused to
-          // proceed on this error; the two now agree.
+          const workspace = row.workspace_id
+            ? ((await db.one(from("workspaces").where(q => q("id").equals(row.workspace_id)))) as any)
+            : null
+          releaseOperation = await beginOperation(db, {
+            idempotencyKey: `destroy:${row.id}:${row.provider_id}`,
+            provider: provider.kind,
+            kind: "destroy",
+            boxId: row.id,
+            workspaceId: workspace?.id ?? null,
+          })
           try {
-            await ocean.destroyDroplet(token, Number(row.provider_id))
+            await operationStep(db, releaseOperation, "releasing-machine", String(row.provider_id))
+            // The provider owns the order. DigitalOcean detaches first; Docker
+            // removes the container while preserving its named volume.
+            await provider.compute.release(db, {
+              machineId: String(row.provider_id),
+              workspaceId: workspace?.volume_id ?? null,
+              preserveWorkspace: Boolean(workspace),
+            })
+
+            if (provider.network) {
+              const domain = await getSetting(db, SETTING.domain)
+              await provider.network.remove(db, domain, row.hostname.replace(`.${domain}`, "")).catch(err => {
+                console.error("dns cleanup failed", err)
+              })
+            }
           } catch (err) {
+            await operationFailed(db, releaseOperation.id, err)
             console.error(`[devpipe] could not destroy ${row.hostname}:`, err)
             return json(c, 502, {
               error: `That box could not be destroyed: ${String((err as any)?.message ?? err)}. It is still running, so it has been left in your list to try again.`,
             })
           }
-
-          const domain = await getSetting(db, SETTING.domain)
-          try {
-            await ocean.deleteRecord(token, domain, row.hostname.replace(`.${domain}`, ""))
-          } catch (err) {
-            // A record pointing at an address that is no longer ours is worth
-            // a line in the journal, not worth keeping a destroyed box in
-            // somebody's list over. `sweep` finds these.
-            console.error("dns cleanup failed", err)
-          }
         }
+
+        // The last partial hour, charged before the row stops being one this
+        // can be worked out from. After the droplet is actually gone, so a
+        // destroy that failed above has not billed for time the machine went
+        // on running.
+        await stopMetering(db, row.id)
 
         await db.execute(
           from("boxes")
             .where(q => q("id").equals(row.id))
-            .update({ status: "destroyed", destroyed_at: new Date() }),
+            .update({ status: "destroyed", provider_id: null, endpoint: null, destroyed_at: new Date() }),
         )
-        // Frees the subscription for the next box. It does not cancel it —
-        // that is the Stripe portal, and the two are deliberately separate.
-        await releaseSubscription(db, row.id)
         // Neither the sessions nor the ports are coming back, so neither are
-        // the links pointing at them.
         await retireSharing(db, row.id)
+        if (releaseOperation) await operationSucceeded(db, releaseOperation.id)
         await audit(db, me.id, "box.destroyed", row.hostname)
         return json(c, 200, { ok: true })
       }),
@@ -936,14 +1171,15 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
  */
 const settleAddress = async (
   db: Connection,
-  token: string,
+  provider: MachineProvider,
   boxId: number,
-  dropletId: number,
+  machineId: string,
   domain: string,
   host: string,
-) => {
+): Promise<boolean> => {
+  let providerErrors = 0
   for (let attempt = 0; attempt < 40; attempt++) {
-    await new Promise(r => setTimeout(r, 5_000))
+    if (attempt > 0) await new Promise(r => setTimeout(r, 5_000))
 
     // Bail if the box went away while we were waiting. Without this check a
     // box destroyed mid-provision has its DNS record written *after* the
@@ -953,27 +1189,229 @@ const settleAddress = async (
     const still = (await db.one(
       from("boxes")
         .where(q => q("id").equals(boxId))
+        .where(q => q("provider").equals(provider.kind))
+        .where(q => q("provider_id").equals(machineId))
         .where(q => q("destroyed_at").isNull()),
     )) as any
-    if (!still) return
+    if (!still) return false
 
-    const droplet = await ocean.getDroplet(token, dropletId)
-    if (!droplet?.ip) continue
+    let machine: Machine | null
     try {
-      await ocean.upsertRecord(token, domain, host, droplet.ip)
+      machine = await provider.compute.inspect(db, machineId)
+    } catch (err) {
+      providerErrors += 1
+      console.error(`[devpipe] could not inspect ${provider.kind} machine ${machineId}:`, err)
+      continue
+    }
+    if (!machine?.address) continue
+    try {
+      if (provider.network) await provider.network.publish(db, domain, host, machine.address)
       await db.execute(
         from("boxes")
           .where(q => q("id").equals(boxId))
-          .update({ ip: droplet.ip }),
+          .where(q => q("provider_id").equals(machineId))
+          .update({ ip: machine.address, endpoint: machine.endpoint }),
       )
     } catch (err) {
       console.error("dns for", host, err)
+      continue
     }
+    return true
+  }
+  if (providerErrors > 0) throw new Error(`Could not confirm the ${provider.label} machine's address.`)
+  return false
+}
+
+const abandonProvisioning = async (
+  db: Connection,
+  provider: MachineProvider,
+  operation: MachineOperation,
+  boxId: number,
+  machineId: string,
+  workspace: any | null,
+  error: unknown,
+) => {
+  try {
+    await provider.compute.release(db, {
+      machineId,
+      workspaceId: workspace?.volume_id ?? null,
+      preserveWorkspace: Boolean(workspace),
+    })
+  } catch (cleanupError) {
+    await operationRetry(db, operation.id, "cleanup-needed", cleanupError)
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .where(q => q("provider_id").equals(machineId))
+        .update({
+          status_detail: `Cleanup needs retry: ${String((cleanupError as any)?.message ?? cleanupError)}`.slice(0, 200),
+        }),
+    )
+    throw cleanupError
+  }
+  await stopMetering(db, boxId)
+  const status = operation.kind === "wake" ? ASLEEP : "failed"
+  const current = (await db.one(from("boxes").where(q => q("id").equals(boxId)))) as any
+  if (!current?.provider_id || String(current.provider_id) === machineId) {
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .update({
+          status,
+          provider_id: null,
+          endpoint: null,
+          ip: "",
+          status_detail: String((error as any)?.message ?? error).slice(0, 200),
+        }),
+    )
+  }
+  await operationFailed(db, operation.id, error)
+}
+
+const finishProvisioning = async (
+  db: Connection,
+  provider: MachineProvider,
+  operation: MachineOperation,
+  boxId: number,
+  machineId: string,
+  workspace: any | null,
+  domain: string,
+  host: string,
+): Promise<void> => {
+  try {
+    if (workspace) {
+      if (!provider.workspaces) throw new Error(`${provider.label} cannot attach persistent workspaces.`)
+      await operationStep(db, operation, "attaching-workspace", machineId)
+      await provider.workspaces.ensureAttached(db, String(workspace.volume_id), machineId)
+    }
+  } catch (err) {
+    await abandonProvisioning(db, provider, operation, boxId, machineId, workspace, err)
     return
   }
-  await db.execute(
-    from("boxes")
-      .where(q => q("id").equals(boxId))
-      .update({ status: "failed", status_detail: "The provider never gave this box an address." }),
+
+  await operationStep(db, operation, "waiting-for-address", machineId)
+  let settled: boolean
+  try {
+    settled = await settleAddress(db, provider, boxId, machineId, domain, host)
+  } catch (err) {
+    // Provider outages are not evidence that the machine failed. Leave the
+    // operation unfinished so the startup reconciler can resume it.
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .where(q => q("provider_id").equals(machineId))
+        .update({ status_detail: String((err as any)?.message ?? err).slice(0, 200) }),
+    )
+    throw err
+  }
+  if (!settled) {
+    await abandonProvisioning(
+      db,
+      provider,
+      operation,
+      boxId,
+      machineId,
+      workspace,
+      new Error("The provider never gave this box an address."),
+    )
+    return
+  }
+
+  if (provider.capabilities.managedBootstrap) {
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .where(q => q("provider_id").equals(machineId))
+        .update({ status: "ready", status_detail: "", ready_at: new Date() }),
+    )
+  }
+  await operationSucceeded(db, operation.id)
+}
+
+/** Resume provider mutations that survived an API restart. */
+export const resumeProvisioning = async (db: Connection): Promise<void> => {
+  const operations = (await unfinishedOperations(db)).filter(
+    operation => operation.kind === "provision" || operation.kind === "wake",
   )
+  for (const operation of operations) {
+    try {
+      const provider = await requireProvider(db, operation.provider)
+      const box = operation.box_id
+        ? ((await db.one(
+            from("boxes")
+              .where(q => q("id").equals(operation.box_id!))
+              .where(q => q("destroyed_at").isNull()),
+          )) as any)
+        : null
+      if (!box) {
+        await operationFailed(db, operation.id, "The box row no longer exists.")
+        continue
+      }
+
+      let machineId = operation.resource_id || box.provider_id
+      if (!machineId) {
+        const found = await provider.compute.findByOperation(db, operation.id)
+        machineId = found?.id ?? null
+      }
+      if (!machineId) {
+        await operationFailed(db, operation.id, "No provider resource was created.")
+        await db.execute(
+          from("boxes")
+            .where(q => q("id").equals(box.id))
+            .update({ status: operation.kind === "wake" ? ASLEEP : "failed", status_detail: "Provisioning stopped." }),
+        )
+        continue
+      }
+
+      const machine = await provider.compute.inspect(db, String(machineId))
+      if (!machine) {
+        await operationFailed(db, operation.id, "The provider resource no longer exists.")
+        await db.execute(
+          from("boxes")
+            .where(q => q("id").equals(box.id))
+            .update({
+              status: operation.kind === "wake" ? ASLEEP : "failed",
+              provider_id: null,
+              endpoint: null,
+              status_detail: "The provider resource no longer exists.",
+            }),
+        )
+        continue
+      }
+      await db.execute(
+        from("boxes")
+          .where(q => q("id").equals(box.id))
+          .update({ provider: provider.kind, provider_id: machine.id, endpoint: machine.endpoint }),
+      )
+      const workspace = box.workspace_id
+        ? ((await db.one(from("workspaces").where(q => q("id").equals(box.workspace_id)))) as any)
+        : null
+      if (operation.step === "cleanup-needed") {
+        await abandonProvisioning(
+          db,
+          provider,
+          operation,
+          box.id,
+          machine.id,
+          workspace,
+          new Error(operation.last_error || "Provisioning cleanup was interrupted."),
+        )
+        continue
+      }
+      await finishProvisioning(
+        db,
+        provider,
+        operation,
+        box.id,
+        machine.id,
+        workspace,
+        String(operation.payload.domain ?? ""),
+        String(operation.payload.host ?? ""),
+      )
+    } catch (err) {
+      // Provider or database unavailable: keep the operation live for the next
+      // restart. Marking it failed would turn uncertainty into forgotten spend.
+      console.error(`[devpipe] could not resume machine operation ${operation.id}:`, err)
+    }
+  }
 }

@@ -7,23 +7,27 @@ import { setAppOrigin } from "./auth/cookie.ts"
 import { authRoutes } from "./auth/index.ts"
 import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
-import { billingRoutes } from "./billing/index.ts"
 import { companionRoutes } from "./boxes/companion.ts"
-import { boxRoutes, convergeFirewall } from "./boxes/index.ts"
-import { expireDormant, reclaimIdle } from "./boxes/reclaim.ts"
-import { previewHost, previewRoutes } from "./previews/index.ts"
-import { shareRoutes, shareSocket } from "./shares/index.ts"
+import { boxRoutes, convergeFirewall, resumeProvisioning } from "./boxes/index.ts"
+import { expireDormant, reclaimIdle, sweepSpendCap } from "./boxes/reclaim.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
 import { claimRoutes } from "./claims/index.ts"
 import { createEmailer } from "./email/index.ts"
+import { healthRoutes } from "./health/index.ts"
+import { resumeReleases } from "./machine/recovery.ts"
+import { previewHost, previewRoutes } from "./previews/index.ts"
 import { watchEgress } from "./security/egress.ts"
 import { securityHeaders } from "./security/headers.ts"
 import { sweepRateLimits } from "./security/ratelimit.ts"
-import { terminalRoutes } from "./terminals/index.ts"
+import { setupRoutes } from "./setup/index.ts"
+import { shareRoutes, shareSocket } from "./shares/index.ts"
+import { spendRoutes } from "./spend/index.ts"
+import { terminalRoutes, terminalSocket } from "./terminals/index.ts"
 import { userRoutes } from "./users/index.ts"
-import { waitlistRoutes } from "./waitlist/index.ts"
+import { secretsAvailable } from "./util/secretbox.ts"
 import { boxVaultRoutes } from "./vault/box.ts"
 import { vaultRoutes } from "./vault/index.ts"
+import { waitlistRoutes } from "./waitlist/index.ts"
 import { workspaceRoutes } from "./workspaces/index.ts"
 
 /**
@@ -62,6 +66,19 @@ const config = defineConfig({
   /** A Resend-compatible host to send through. Empty means Resend itself. */
   emailBaseUrl: env("EMAIL_BASE_URL", { default: "" }),
 })
+
+if (config.appUrl.startsWith("https://")) {
+  if (!config.databaseUrl) {
+    console.error("[devpipe] DATABASE_URL is required for an HTTPS deployment; refusing the local fallback.")
+    process.exit(1)
+  }
+  if (!secretsAvailable()) {
+    console.error(
+      "[devpipe] DEVPIPE_SECRET_KEY is required for an HTTPS deployment; refusing to store credentials in plaintext.",
+    )
+    process.exit(1)
+  }
+}
 
 /**
  * Creates the development database if the server is falling back to it.
@@ -130,6 +147,7 @@ const emailer = createEmailer({
 setAppOrigin(config.appUrl)
 
 const baseFetch = router(
+  ...healthRoutes(db),
   ...authRoutes(db),
   ...passwordRoutes(db, { emailer, appUrl: config.appUrl }),
   ...sessionRoutes(db),
@@ -138,12 +156,13 @@ const baseFetch = router(
   ...workspaceRoutes(db),
   ...vaultRoutes(db),
   ...boxVaultRoutes(db),
-  ...billingRoutes(db, config.appUrl),
-  ...terminalRoutes(db),
+  ...terminalRoutes(db, config.appUrl),
   ...companionRoutes(db),
   ...previewRoutes(db),
   ...shareRoutes(db, config.appUrl),
   ...adminRoutes(db),
+  ...setupRoutes(db),
+  ...spendRoutes(db),
   ...claimRoutes(db),
   ...broadcastRoutes(db, emailer, config.appUrl),
   ...waitlistRoutes(db),
@@ -164,6 +183,7 @@ const headers = Object.entries(securityHeaders(config.boxDomain))
  */
 const preview = previewHost(db, config.appUrl)
 const shared = shareSocket(db)
+const terminal = terminalSocket(db)
 
 /**
  * One websocket this process is in the middle of.
@@ -190,7 +210,7 @@ type Bridged = {
 const fetch = async (req: Request, server: any): Promise<Response | undefined> => {
   const url = new URL(req.url)
 
-  const socket = (await preview.socket(req)) ?? (await shared(req))
+  const socket = (await preview.socket(req)) ?? (await shared(req)) ?? (await terminal(req))
   if (socket) {
     const data: Bridged = { readOnly: false, ...socket, upstream: null, queue: [] }
     // The subprotocol has to be echoed back or the browser drops the
@@ -220,7 +240,10 @@ const server = Bun.serve({
     open(ws: any) {
       const data = ws.data as Bridged
       const protocols = data.protocol
-        ? data.protocol.split(",").map(part => part.trim()).filter(Boolean)
+        ? data.protocol
+            .split(",")
+            .map(part => part.trim())
+            .filter(Boolean)
         : undefined
       let upstream: WebSocket
       try {
@@ -295,6 +318,8 @@ sweeper.unref()
 // running box. Hourly, and once at startup, so a deploy is enough to roll a
 // rule change out to machines nobody is touching.
 void convergeFirewall(db)
+void resumeProvisioning(db).catch(err => console.error("[devpipe] provisioning recovery:", err))
+void resumeReleases(db).catch(err => console.error("[devpipe] release recovery:", err))
 const firewall = setInterval(() => void convergeFirewall(db), 3_600_000)
 firewall.unref()
 
@@ -324,12 +349,26 @@ const reclaim = setInterval(() => {
 }, 900_000)
 reclaim.unref()
 
+// What everything has cost so far, and whether that is now too much.
+//
+// Five minutes rather than fifteen. This interval is the resolution of the
+// spending cap: machines only stop when a tick notices the cap is reached, so
+// the gap between ticks is how far past it an instance can get. At five
+// minutes that is thirty-seven cents on an H100 and a fraction of a cent on
+// anything ordinary, which is the right order of magnitude for a number
+// nobody chose.
+const spend = setInterval(() => {
+  void sweepSpendCap(db).catch(err => console.error("[devpipe] spend sweep:", err))
+}, 300_000)
+spend.unref()
+
 const shutdown = async (signal: string) => {
   try {
     clearInterval(sweeper)
     clearInterval(firewall)
     clearInterval(egress)
     clearInterval(reclaim)
+    clearInterval(spend)
     await server.stop(false)
     await db.close()
   } catch (err) {

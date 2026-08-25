@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { boxSocketEndpoint } from "../providers/endpoint.ts"
 import { clientIp, consume } from "../security/ratelimit.ts"
 import { audit } from "../util/audit.ts"
 import { randomToken, sha256Hex } from "../util/token.ts"
@@ -49,9 +50,7 @@ const live = (row: ShareRow | null): row is ShareRow => {
 }
 
 const byToken = async (db: Connection, token: string) =>
-  (await db.one(
-    from("shares").where(q => q("token_hash").equals(sha256Hex(token))),
-  )) as ShareRow | null
+  (await db.one(from("shares").where(q => q("token_hash").equals(sha256Hex(token))))) as ShareRow | null
 
 /**
  * The share this request is for, and where its socket should go.
@@ -96,7 +95,7 @@ export const shareSocket = (db: Connection) => async (req: Request) => {
     .catch(() => {})
 
   return {
-    url: `wss://${box.hostname}/v1/sessions/${encodeURIComponent(share.session_id)}/attach?token=${encodeURIComponent(box.agent_token)}`,
+    url: `${boxSocketEndpoint(box)}/v1/sessions/${encodeURIComponent(share.session_id)}/attach?token=${encodeURIComponent(box.agent_token)}`,
     protocol: null as string | null,
     /** Everything travelling towards the box is dropped, including resizes. */
     readOnly: share.mode !== "control",

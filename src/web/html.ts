@@ -17,6 +17,6 @@ export const prepareIndexHtml = (html: string): string =>
     // it with the app shell again, and the module never loads. The page is
     // blank, the console is silent, and nothing about it points at the URL.
     //
-    // It only worked while every route was a single segment: at /billing,
+    // It only worked while every route was a single segment: at /spend,
     // ./chunk-abc123.js happens to resolve to the right place.
     .replace(/(\bsrc|\bhref)="\.\//g, '$1="/')

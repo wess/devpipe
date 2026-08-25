@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHmac } from "node:crypto"
-import { ATTACH, ATTACH_TTL, attachAny, attachOne, signForBox } from "../src/util/boxscope.ts"
+import { ATTACH, ATTACH_TTL, attachAny, attachOne, signForBox, verifyForBox } from "../src/util/boxscope.ts"
 
 /**
  * The browser's terminal credential. What matters here is not that these parse
@@ -50,6 +50,12 @@ describe("scoped attach tokens", () => {
     expect(createHmac("sha256", "box-a").update(body).digest("base64url")).not.toBe(
       createHmac("sha256", "box-b").update(body).digest("base64url"),
     )
+  })
+
+  test("the control-plane relay accepts the same scoped token as the daemon", () => {
+    const token = attachAny(KEY)
+    expect(verifyForBox(KEY, token)).toBe(ATTACH)
+    expect(verifyForBox("another box", token)).toBeNull()
   })
 
   test("two minutes is the lifetime, not two hours", () => {

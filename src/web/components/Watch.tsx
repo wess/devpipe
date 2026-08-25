@@ -51,9 +51,7 @@ export const Watch: React.FC<{ token: string }> = ({ token }) => {
             <span>Devpipe</span>
           </div>
           <p className="note bad">{error}</p>
-          <p className="muted small">
-            Links to a terminal are made by the person whose machine it is, and they end.
-          </p>
+          <p className="muted small">Links to a terminal are made by the person whose machine it is, and they end.</p>
         </div>
       </div>
     )
@@ -77,9 +75,7 @@ export const Watch: React.FC<{ token: string }> = ({ token }) => {
         <span className="grow" />
         {/* Said plainly and left on screen. A watcher who does not know they
             are a watcher reports a broken keyboard. */}
-        <span className="muted small">
-          {share.mode === "control" ? "you can type" : "watching — read only"}
-        </span>
+        <span className="muted small">{share.mode === "control" ? "you can type" : "watching — read only"}</span>
         <span className="muted small">{status}</span>
       </nav>
       <div className="pane">

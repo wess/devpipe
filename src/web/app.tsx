@@ -28,7 +28,9 @@ import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { Previews } from "./components/Previews.tsx"
 import { Runs } from "./components/Runs.tsx"
 import { Settings } from "./components/Settings.tsx"
+import { Setup } from "./components/Setup.tsx"
 import { ShareTerminal } from "./components/ShareTerminal.tsx"
+import { Spend } from "./components/Spend.tsx"
 import { TerminalView } from "./components/TerminalView.tsx"
 import { Vault } from "./components/Vault.tsx"
 import { Watch } from "./components/Watch.tsx"
@@ -51,6 +53,8 @@ type Availability = {
 const Gate: React.FC<{ notice?: string | null; onDone: () => void }> = ({ notice, onDone }) => {
   const [needsOwner, setNeedsOwner] = useState<boolean | null>(null)
   const [inviteRequired, setInviteRequired] = useState(false)
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false)
+  const [setupToken, setSetupToken] = useState("")
   const [invite, setInvite] = useState("")
   const [mode, setMode] = useState<"login" | "register" | "forgot">("login")
   const [email, setEmail] = useState("")
@@ -68,6 +72,7 @@ const Gate: React.FC<{ notice?: string | null; onDone: () => void }> = ({ notice
       .then(s => {
         setNeedsOwner(s.needs_owner)
         setInviteRequired(s.invite_required)
+        setSetupTokenRequired(s.setup_token_required)
         if (s.needs_owner) setMode("register")
       })
       .catch(() => setNeedsOwner(false))
@@ -122,8 +127,9 @@ const Gate: React.FC<{ notice?: string | null; onDone: () => void }> = ({ notice
         setBusy(false)
         return
       }
-      if (mode === "register") await api.register({ email, username, name, password, invite })
-      else await api.login(email, password)
+      if (mode === "register") {
+        await api.register({ email, username, name, password, invite, setup_token: setupToken })
+      } else await api.login(email, password)
       onDone()
     } catch (err: any) {
       setError(String(err.message))
@@ -202,6 +208,19 @@ const Gate: React.FC<{ notice?: string | null; onDone: () => void }> = ({ notice
               <span>Name</span>
               <input value={name} onChange={e => setName(e.target.value)} />
             </label>
+            {needsOwner && setupTokenRequired && (
+              <label className="field">
+                <span>Setup token</span>
+                <input
+                  type="password"
+                  value={setupToken}
+                  onChange={e => setSetupToken(e.target.value)}
+                  autoComplete="off"
+                  required
+                />
+                <small className="muted">Read it from DEVPIPE_SETUP_TOKEN on the control-plane host.</small>
+              </label>
+            )}
             {inviteRequired && (
               <label className="field">
                 <span>Invite code</span>
@@ -563,11 +582,10 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
                   <span className="muted small">{b.status === "ready" ? b.hostname : b.status}</span>
                 </span>
               </button>
-              {/* A box bills by the hour from the moment it exists, and until
-                  now the only way to stop one was the DigitalOcean console —
-                  which destroys the droplet without telling Devpipe, leaving a
-                  row that still claims to be ready and a subscription still
-                  held against it. */}
+              {/* A box costs money from the moment it exists, and until now
+                  the only way to stop one was the DigitalOcean console — which
+                  destroys the droplet without telling Devpipe, leaving a row
+                  that still claims to be ready. */}
               {/* Beside destroy, and deliberately first: it is the reversible
                   one, and until now the only way to stop paying for a machine
                   before its idle window ran out was the one that is not. */}
@@ -923,8 +941,8 @@ const DestroyBox: React.FC<{
             </p>
           )}
           <p className="muted small">
-            Any subscription covering it is freed for the next box — destroying does not cancel it. That happens in the
-            billing portal.
+            It stops costing anything the moment the droplet is gone. Sleeping does the same and keeps the machine in
+            your list, so this is only for a box you are finished with.
           </p>
           <label className="field">
             <span>
@@ -944,156 +962,6 @@ const DestroyBox: React.FC<{
           </button>
         </footer>
       </dialog>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Billing
-// ---------------------------------------------------------------------------
-
-const away = async (get: () => Promise<{ url: string }>, fail: (message: string) => void) => {
-  try {
-    location.href = (await get()).url
-  } catch (err: any) {
-    fail(String(err.message))
-  }
-}
-
-const Billing: React.FC = () => {
-  const [data, setData] = useState<api.BillingStatus | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [settling, setSettling] = useState(false)
-
-  const load = useCallback(async () => {
-    try {
-      setData(await api.billingStatus())
-    } catch (e: any) {
-      setError(String(e.message))
-    }
-  }, [])
-
-  useEffect(() => {
-    const outcome = new URLSearchParams(location.search).get("checkout")
-    if (!outcome) {
-      void load()
-      return
-    }
-    // Back to /billing, not to "/" — that is the lander, and rewriting the URL
-    // to it meant a reload after paying left the customer looking at the
-    // marketing page. Dropping the parameter is the point: it is a one-time
-    // instruction, and keeping it would re-run the settle loop on every visit.
-    history.replaceState({}, "", "/billing")
-    if (outcome !== "done") {
-      setNotice("Checkout cancelled. Nothing was charged.")
-      void load()
-      return
-    }
-
-    // Stripe sends the browser back and posts the webhook that records the
-    // subscription independently, and the browser usually wins the race. So
-    // this waits for the row rather than telling somebody who has just paid
-    // that they have no subscription.
-    let cancelled = false
-    setSettling(true)
-    void (async () => {
-      const first = await api.billingStatus().catch(() => null)
-      if (first && !cancelled) setData(first)
-      const before = first?.subscriptions.length ?? 0
-      for (let i = 0; i < 8 && !cancelled; i++) {
-        await new Promise(r => setTimeout(r, 1500))
-        const next = await api.billingStatus().catch(() => null)
-        if (!next || cancelled) continue
-        setData(next)
-        if (next.subscriptions.length > before) break
-      }
-      if (cancelled) return
-      setSettling(false)
-      setNotice("Payment received.")
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [load])
-
-  if (!data)
-    return (
-      <div className="page">{error ? <p className="note bad">{error}</p> : <Loader2 className="spin" size={16} />}</div>
-    )
-
-  return (
-    <div className="page">
-      <h1>Billing</h1>
-      {settling && <p className="note ok">Payment received. Setting up your subscription.</p>}
-      {notice && !settling && <p className="note ok">{notice}</p>}
-      {error && <p className="note bad">{error}</p>}
-
-      {!data.configured ? (
-        <p className="note warn">This instance is not selling boxes. Nothing here is charged for.</p>
-      ) : (
-        <>
-          <section className="card">
-            <h2>Your subscriptions</h2>
-            {data.subscriptions.length === 0 ? (
-              <p className="muted small">Nothing yet. One subscription covers one box of the size it was bought at.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Size</th>
-                    <th>Status</th>
-                    <th>Covering</th>
-                    <th>Renews</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.subscriptions.map(s => (
-                    <tr key={s.id}>
-                      <td>{s.label}</td>
-                      <td>
-                        <span className={`pill ${s.status === "active" ? "ok" : ""}`}>{s.status}</span>
-                        {s.cancel_at_period_end && <span className="pill bad">ending</span>}
-                      </td>
-                      <td className="muted small">{s.box_id ? `box ${s.box_id}` : "nothing yet"}</td>
-                      <td className="muted small">{s.current_period_end ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <p className="note">
-              Destroying a box frees its subscription for the next one. It does not cancel it — cancelling happens in
-              the billing portal, and they are two separate actions.
-            </p>
-            <button type="button" className="ghost" onClick={() => void away(api.billingPortal, setError)}>
-              Manage billing
-            </button>
-          </section>
-
-          <section className="card">
-            <h2>Sizes</h2>
-            <div className="plan-grid">
-              {data.plans.map(p => {
-                const spare = data.can_create.includes(p.size)
-                return (
-                  <div key={p.size} className={`plan ${spare ? "on" : ""}`}>
-                    <strong>{p.label}</strong>
-                    <div className="price">
-                      ${p.monthly}
-                      <span>/month</span>
-                    </div>
-                    <span className="muted small">{spare ? "Covered — you can create this size now" : ""}</span>
-                    <button type="button" onClick={() => void away(() => api.billingCheckout(p.size), setError)}>
-                      Subscribe
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-        </>
-      )}
     </div>
   )
 }
@@ -1171,6 +1039,7 @@ const App: React.FC = () => {
   const [ready, setReady] = useState(false)
   /** Why the emulator did not load, when it did not. Terminals need it; nothing else does. */
   const [vtError, setVtError] = useState<string | null>(null)
+  const [setup, setSetup] = useState<api.SetupState | null>(null)
   // Read after `me()` has had a chance to refresh it, so a name changed on
   // another device — or an owner flag granted since sign-in — is reflected
   // rather than frozen at whatever the last sign-in wrote.
@@ -1208,6 +1077,16 @@ const App: React.FC = () => {
       .catch(() => setSignedIn(false))
   }, [signedIn])
 
+  // Only the owner may read it, so only the owner asks. A 403 here is the
+  // ordinary answer for everybody else rather than a failure.
+  useEffect(() => {
+    if (!signedIn || !user?.is_owner) return
+    void api
+      .setupState()
+      .then(setSetup)
+      .catch(() => {})
+  }, [signedIn, user?.is_owner])
+
   // An unrecognised path renders the workspace, so the address bar has to be
   // told — otherwise /wat stays in it, gets bookmarked, and is a link that only
   // works by accident. Skipped while a reset token is present: that flow owns
@@ -1239,6 +1118,19 @@ const App: React.FC = () => {
   }
   if (!signedIn) return <Gate notice={notice} onDone={() => setSignedIn(true)} />
   if (route.view === "preview" && route.slug) return <PreviewGate slug={route.slug} />
+
+  /**
+   * A fresh instance opens on the wizard rather than on an empty box list.
+   *
+   * Only for the owner, and only until they have been through it once — the
+   * flag it turns on is a record that somebody read the last screen, not a
+   * gate. Everybody else on a half-configured instance sees the ordinary app,
+   * which is the honest thing: what they can do is decided by whether it has a
+   * provider and a domain, not by whether the owner has finished reading.
+   */
+  if (user?.is_owner && setup && !setup.complete) {
+    return <Setup onDone={() => void api.setupState().then(setSetup)} />
+  }
   if (!ready) {
     return (
       <div className="gate">
@@ -1271,7 +1163,7 @@ const App: React.FC = () => {
         >
           <TerminalIcon size={14} /> Machine
         </button>
-        {user?.is_owner && (
+        {(user?.role === "owner" || user?.role === "admin") && (
           <button type="button" className={`ghost small ${route.view === "admin" ? "on" : ""}`} onClick={to("admin")}>
             <Shield size={14} /> Admin
           </button>
@@ -1279,8 +1171,8 @@ const App: React.FC = () => {
         <button type="button" className={`ghost small ${route.view === "vault" ? "on" : ""}`} onClick={to("vault")}>
           <KeyRound size={14} /> Vault
         </button>
-        <button type="button" className={`ghost small ${route.view === "billing" ? "on" : ""}`} onClick={to("billing")}>
-          <CreditCard size={14} /> Billing
+        <button type="button" className={`ghost small ${route.view === "spend" ? "on" : ""}`} onClick={to("spend")}>
+          <CreditCard size={14} /> Spending
         </button>
         <button
           type="button"
@@ -1322,7 +1214,7 @@ const App: React.FC = () => {
       )}
       {route.view === "runs" && <Runs onBack={() => go({ view: "workspace", tab: "overview" })} />}
       {route.view === "workspace" && <Workspace vtReady={ready} />}
-      {route.view === "billing" && <Billing />}
+      {route.view === "spend" && <Spend />}
       {route.view === "vault" && <Vault />}
       {route.view === "settings" && <Settings onSaved={setUser} />}
       {route.view === "admin" && <Admin tab={route.tab} onTab={tab => go({ view: "admin", tab })} />}

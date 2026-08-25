@@ -22,7 +22,7 @@
     "@types/react-dom": "latest"
   },
   "dependencies": {
-    "atlas": "github:wess/atlas#main",
+    "atlas": "github:wess/atlas#d830f3d1fed2b14fb3da9b3c811986f9d1773c9a",
     "lucide-react": "^0.468.0",
     "react": "^19",
     "react-dom": "^19"

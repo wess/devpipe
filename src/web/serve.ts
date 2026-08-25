@@ -64,6 +64,7 @@ const PAGES = new Set([
   "/asylum.html",
   "/asylum-docs.html",
   "/asylum-class.html",
+  "/self-host.html",
 ])
 
 /**
@@ -286,7 +287,10 @@ const server = Bun.serve({
     open(ws: any) {
       const data = ws.data as Relayed
       const protocols = data.protocol
-        ? data.protocol.split(",").map(part => part.trim()).filter(Boolean)
+        ? data.protocol
+            .split(",")
+            .map(part => part.trim())
+            .filter(Boolean)
         : undefined
       let upstream: WebSocket
       try {

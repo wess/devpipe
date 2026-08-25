@@ -35,12 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `daemon` path-depends on sinclair's `pty` and `vt`, which live beside
-      # this repo rather than in it. Until that is a submodule or a published
-      # crate, CI has to put it where the manifest expects.
-      - name: Fetch sinclair
-        run: git clone --depth 1 https://github.com/wess/sinclair.git ../sinclair
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

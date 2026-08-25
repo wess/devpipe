@@ -15,8 +15,6 @@ description = "C ABI over sinclair's VT emulator, for the Devpipe iPad client"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-# Sinclair's terminal core, unmodified and gpui-free. Path dep for the spike:
-# it means devpipe does not build without sinclair beside it, which is a
-# problem to solve (submodule or published crate) before this is more than a
-# spike.
-vt = { path = "../../sinclair/crates/vt" }
+# Sinclair's terminal core, unmodified and gpui-free. Pinned to a released tag
+# so a clean Devpipe checkout builds without a sibling repository.
+vt = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }

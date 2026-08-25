@@ -155,7 +155,15 @@ apt-get update -qq
 # unzip is here because bun's installer needs it and says so only after the
 # download: "error: unzip is required to install bun". The Debian image does
 # not carry it, so bun failed on every box while every other tool succeeded.
-apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https unzip
+apt-get install -y -qq curl ca-certificates gnupg apt-transport-https unzip
+# On its own line, and allowed to fail. These two come from Caddy's own
+# install instructions and nothing here actually reads them — the repository
+# key is fetched directly below. They matter because a GPU box boots the
+# provider's Ubuntu AI/ML image rather than Debian, debian-keyring lives in
+# universe there, and apt installs *nothing* from a list it cannot fully
+# resolve: one unavailable package would have taken curl, gnupg and unzip down
+# with it and left every tool on the box failing for no visible reason.
+apt-get install -y -qq debian-keyring debian-archive-keyring || true
 say "[ok] base packages"
 
 phase "policy" "Setting what this box will install"

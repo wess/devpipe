@@ -75,6 +75,89 @@ const shape = (d: any): Droplet => ({
   createdAt: d.created_at ?? "",
 })
 
+/**
+ * A size the provider will actually sell, as the catalogue needs it.
+ *
+ * `regions` is the field that matters and the one most easily assumed: a size
+ * is not offered everywhere, and the GPU sizes are offered in one or two
+ * places each. A size whose region list is empty is one this account cannot
+ * create anywhere, which reads identically to "available" in every other
+ * field — so callers filter on both.
+ */
+export type Size = {
+  slug: string
+  /** The provider's own name for it, e.g. "RTX 4000 Ada GPU Droplet - 1X". */
+  description: string
+  memoryMb: number
+  vcpus: number
+  diskGb: number
+  hourly: number
+  monthly: number
+  regions: string[]
+  available: boolean
+  /** Absent on everything that is not a GPU machine. */
+  gpu?: {
+    count: number
+    /** Provider's model id, e.g. `nvidia_h100`, `amd_mi300x`. */
+    model: string
+    vramGb: number
+  }
+}
+
+const shapeSize = (s: any): Size => ({
+  slug: String(s.slug ?? ""),
+  description: String(s.description ?? ""),
+  memoryMb: Number(s.memory ?? 0),
+  vcpus: Number(s.vcpus ?? 0),
+  diskGb: Number(s.disk ?? 0),
+  hourly: Number(s.price_hourly ?? 0),
+  monthly: Number(s.price_monthly ?? 0),
+  regions: Array.isArray(s.regions) ? s.regions.map(String) : [],
+  available: Boolean(s.available),
+  ...(s.gpu_info
+    ? {
+        gpu: {
+          count: Number(s.gpu_info.count ?? 1),
+          model: String(s.gpu_info.model ?? ""),
+          // Always reported in gibibytes today, but the field says which and
+          // reading it as a number regardless would silently mislabel a card.
+          vramGb: s.gpu_info.vram?.unit === "gib" ? Number(s.gpu_info.vram?.amount ?? 0) : 0,
+        },
+      }
+    : {}),
+})
+
+/**
+ * Every size on the account, GPU and otherwise.
+ *
+ * Paged because the list is over two hundred entries and the default page is
+ * twenty — a single request that looks like it worked and quietly returns a
+ * tenth of the catalogue is the failure worth spending a loop to avoid.
+ */
+export const listSizes = async (token: string): Promise<Size[]> => {
+  const sizes: Size[] = []
+  let path: string | null = "/sizes?per_page=200"
+  while (path) {
+    const body: any = await request(token, path)
+    for (const s of body?.sizes ?? []) sizes.push(shapeSize(s))
+    const next = body?.links?.pages?.next
+    path = next ? new URL(next).pathname + new URL(next).search : null
+  }
+  return sizes
+}
+
+/** Region slugs to the names a person recognises. */
+export const listRegions = async (token: string): Promise<{ slug: string; name: string; features: string[] }[]> => {
+  const body: any = await request(token, "/regions?per_page=200")
+  return (body?.regions ?? [])
+    .filter((r: any) => r.available)
+    .map((r: any) => ({
+      slug: String(r.slug ?? ""),
+      name: String(r.name ?? r.slug ?? ""),
+      features: Array.isArray(r.features) ? r.features.map(String) : [],
+    }))
+}
+
 export const verifyToken = async (token: string) => {
   const body: any = await request(token, "/account")
   return {
@@ -90,12 +173,8 @@ export const listDroplets = async (token: string): Promise<Droplet[]> => {
 }
 
 export const getDroplet = async (token: string, id: number): Promise<Droplet | null> => {
-  try {
-    const body: any = await request(token, `/droplets/${id}`)
-    return body?.droplet ? shape(body.droplet) : null
-  } catch {
-    return null
-  }
+  const body: any = await request(token, `/droplets/${id}`, GONE)
+  return body?.droplet ? shape(body.droplet) : null
 }
 
 export const createDroplet = async (
@@ -349,6 +428,27 @@ export const listSshKeys = async (token: string) => {
   return (body?.ssh_keys ?? []).map((k: any) => ({ id: k.id, name: k.name }))
 }
 
+/**
+ * Whether this account holds the DNS for a domain.
+ *
+ * The precondition nobody expects. A box is reached at a name under this
+ * domain, and that name is written as an A record on the provider's own DNS —
+ * so a domain whose nameservers point at a registrar, at Cloudflare, or
+ * anywhere else produces boxes that build perfectly, never resolve, never get
+ * a certificate, and are unreachable for a reason nothing in the product would
+ * mention. Asking the provider up front is the difference between a setup step
+ * and an afternoon.
+ */
+export const hasDomain = async (token: string, domain: string): Promise<boolean> => {
+  const body: any = await request(token, `/domains/${encodeURIComponent(domain)}`, GONE)
+  return Boolean(body?.domain?.name)
+}
+
+export const listDomains = async (token: string): Promise<string[]> => {
+  const body: any = await request(token, "/domains?per_page=200")
+  return (body?.domains ?? []).map((d: any) => String(d.name)).filter(Boolean)
+}
+
 // ---- bandwidth --------------------------------------------------------------
 
 /**
@@ -466,12 +566,8 @@ export const deleteRecordById = async (token: string, domain: string, id: number
 }
 
 export const getVolume = async (token: string, id: string): Promise<Volume | null> => {
-  try {
-    const body: any = await request(token, `/volumes/${id}`)
-    return body?.volume ? volume(body.volume) : null
-  } catch {
-    return null
-  }
+  const body: any = await request(token, `/volumes/${id}`, GONE)
+  return body?.volume ? volume(body.volume) : null
 }
 
 /**

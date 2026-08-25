@@ -5,12 +5,21 @@ import { assign, halt } from "@atlas/server"
 import { sha256Hex } from "../util/token.ts"
 import { cookieValue, originIsOurs, SESSION_COOKIE } from "./cookie.ts"
 import { agentClass, sameClient } from "./fingerprint.ts"
+import { asRole, atLeast, type Role } from "./roles.ts"
 
 export type AuthUser = {
   id: number
   email: string
   username: string
   name: string
+  role: Role
+  /**
+   * Derived from the role, not stored beside it.
+   *
+   * Every gate that reads this means "the person whose provider account and
+   * card this instance runs on", which is what `owner` is. Keeping it as a
+   * convenience rather than a column is what stops the two disagreeing.
+   */
   is_owner: boolean
 }
 
@@ -135,16 +144,37 @@ export const requireAuth =
         email: user.email,
         username: user.username,
         name: user.name,
-        is_owner: Boolean(user.is_owner),
+        role: asRole(user.role),
+        is_owner: asRole(user.role) === "owner",
       } satisfies AuthUser,
     })
   }
 
-/** Owner-only routes: user management, credentials, instance settings. */
+/**
+ * Owner-only routes: credentials, what things cost, the spend cap, and who
+ * else may administer the instance.
+ *
+ * The test is deliberately the narrowest one available — everything behind it
+ * either spends the owner's money or decides who else can.
+ */
 export const requireOwner = (): PipeFn => async conn => {
   const user = (conn as any).assigns?.auth as AuthUser | undefined
-  if (!user?.is_owner) {
+  if (!user || user.role !== "owner") {
     return halt(conn, 403, { error: "That is only available to the instance owner." })
+  }
+  return conn
+}
+
+/**
+ * Admin routes: people, boxes, invites, the audit log.
+ *
+ * The owner passes this too — they are an admin with more besides, and a rule
+ * that made the owner ask an admin for help would be a rule nobody could use.
+ */
+export const requireAdmin = (): PipeFn => async conn => {
+  const user = (conn as any).assigns?.auth as AuthUser | undefined
+  if (!user || !atLeast(user.role, "admin")) {
+    return halt(conn, 403, { error: "That is only available to admins." })
   }
   return conn
 }

@@ -42,6 +42,7 @@ await migrate.up(db, "./migrations")
 // added later and forgotten here leaks rows between files, and the failure
 // shows up as an unrelated test that only fails when run second.
 const TABLES = [
+  "machine_operations",
   "shares",
   "previews",
   "agent_logins",
@@ -51,8 +52,7 @@ const TABLES = [
   "claims",
   "rate_limits",
   "password_resets",
-  "billing_events",
-  "subscriptions",
+  "spend_ledger",
   "invites",
   "audit",
   "credentials",

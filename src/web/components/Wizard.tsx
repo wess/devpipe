@@ -29,9 +29,11 @@ const GROUPS: { key: Tool["group"]; title: string; blurb: string }[] = [
 
 const OS_OVERHEAD_MB = 140
 
+const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
+
 export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => void }> = ({ onClose, onCreated }) => {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
-  const [billing, setBilling] = useState<api.BillingStatus | null>(null)
+  const [spend, setSpend] = useState<api.MySpend | null>(null)
   const [step, setStep] = useState(0)
   // Empty rather than "My box". A prefilled name is a name nobody changes, and
   // the server falls back to "box" if this is left alone anyway.
@@ -41,6 +43,10 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const [synapse, setSynapse] = useState(false)
   const [region, setRegion] = useState("nyc3")
   const [size, setSize] = useState("")
+  // GPU is a deliberate detour, not the default. Somebody who wants one knows
+  // they want one; everybody else should never be shown a tile that costs more
+  // per hour than the ordinary boxes cost per month.
+  const [gpuMode, setGpuMode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([])
@@ -49,7 +55,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const [workspaceName, setWorkspaceName] = useState("")
   const [workspaceGb, setWorkspaceGb] = useState(10)
 
-  const refreshBilling = useCallback(() => api.billingStatus().then(setBilling), [])
+  const refreshSpend = useCallback(() => api.mySpend().then(setSpend), [])
 
   useEffect(() => {
     api
@@ -60,16 +66,16 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
         setRegion(c.regions[0]?.slug ?? "nyc3")
       })
       .catch(e => setError(String(e.message)))
-    // An instance that sells nothing answers `configured: false`, and every
-    // size stays available — so a failure here must not block the wizard.
-    void refreshBilling().catch(() => {})
+    // What everything has cost so far, so a size can say what it adds. Never
+    // blocks the wizard: a box is still creatable when this fails.
+    void refreshSpend().catch(() => {})
     // Nobody has one on their first box, and an empty list is the normal case
     // rather than a failure — so this never blocks the wizard either.
     void api
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => {})
-  }, [refreshBilling])
+  }, [refreshSpend])
 
   /**
    * A workspace decides the region, rather than the other way round.
@@ -91,23 +97,6 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
 
-  /** Whether a subscription already covers a box of this size. */
-  const covered = (slug: string) => !billing?.configured || billing.can_create.includes(slug)
-
-  /**
-   * Sizes withheld because nothing is being charged yet.
-   *
-   * Said here rather than only on submit: choosing a size, picking tools, and
-   * then being refused three steps later is a worse way to learn it.
-   */
-  const freeCeiling = billing?.configured ? null : (billing?.free_max_size ?? null)
-  const overFreeCeiling = (slug: string) => {
-    if (!freeCeiling) return false
-    const allowed = sizes.findIndex(s => s.slug === freeCeiling)
-    const wanted = sizes.findIndex(s => s.slug === slug)
-    return allowed >= 0 && wanted > allowed
-  }
-
   // Dependencies are resolved here as well as on the server so the memory
   // figure the user is shown matches what will actually be installed.
   const resolved = useMemo(() => {
@@ -126,15 +115,47 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
   const needed = resolved.reduce((sum, t) => sum + t.memoryMb, 0) + OS_OVERHEAD_MB
 
   const sizes = catalog?.sizes ?? []
+  const gpuList = catalog?.gpu_sizes ?? []
+  const gpu = gpuMode ? (gpuList.find(g => g.slug === size) ?? null) : null
   const smallestThatFits = sizes.find(s => s.memoryMb >= needed)
 
   useEffect(() => {
+    // A GPU box has more memory than the whole catalogue asks for, so this
+    // rule has nothing to say about one — and left unguarded it would drag the
+    // selection back to a CPU size the moment a card was picked.
+    if (gpuMode) return
     // Follow the selection rather than stranding the user on a size that no
     // longer fits what they picked.
     if (smallestThatFits && !sizes.find(s => s.slug === size && s.memoryMb >= needed)) {
       setSize(smallestThatFits.slug)
     }
-  }, [smallestThatFits, needed, size, sizes])
+  }, [gpuMode, smallestThatFits, needed, size, sizes])
+
+  /**
+   * A card is only in one or two datacentres, so choosing one chooses where
+   * the box lives. Moved rather than refused: a region left at its default is
+   * not a decision anybody made, and failing the create over it teaches
+   * nothing.
+   */
+  useEffect(() => {
+    if (!gpu) return
+    if (!gpu.regions.includes(region)) setRegion(gpu.regions[0])
+  }, [gpu, region])
+
+  /**
+   * And a workspace cannot follow it. Block storage stays where it was made,
+   * so a workspace in New York and a card only sold in Toronto are two answers
+   * that cannot both stand — the newer one wins.
+   */
+  useEffect(() => {
+    if (!gpu || workspaceId === null) return
+    const w = workspaces.find(x => x.id === workspaceId)
+    if (w && !gpu.regions.includes(w.region)) setWorkspaceId(null)
+  }, [gpu, workspaceId, workspaces])
+
+  /** What this size adds to the instance's bill, for the summary to say so. */
+  const perDay = gpu ? (gpu.cents_per_hour * 24) / 100 : 0
+  const capLeft = spend && spend.cap_cents > 0 ? spend.cap_cents - spend.instance_spent_cents : null
 
   const toggle = (id: string) => {
     const next = new Set(picked)
@@ -174,22 +195,11 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
       })
       onCreated(box.id)
     } catch (e: any) {
-      // 402 means the subscription this size needs is missing or was taken by
-      // another box between the check and the create. The message already says
-      // what to do; re-reading billing is what turns the footer into a
-      // checkout button.
       setError(String(e.message))
-      if (e.status === 402) await refreshBilling().catch(() => {})
-      setBusy(false)
-    }
-  }
-
-  const subscribe = async () => {
-    setBusy(true)
-    try {
-      location.href = (await api.billingCheckout(size)).url
-    } catch (e: any) {
-      setError(String(e.message))
+      // 409 is the instance's spending cap, reached between the check and the
+      // create. Re-reading is what makes the figure in the footer agree with
+      // the refusal.
+      if (e.status === 409) await refreshSpend().catch(() => {})
       setBusy(false)
     }
   }
@@ -279,34 +289,86 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
         {catalog && step === 1 && (
           <div className="wizard-body">
             <h3>Size</h3>
-            <p className="muted small">Your selection needs about {needed} MB once the OS has taken its share.</p>
+            {gpuList.length > 0 && (
+              <div className="choice-grid two">
+                <button
+                  type="button"
+                  className={`choice ${gpuMode ? "" : "on"}`}
+                  onClick={() => {
+                    setGpuMode(false)
+                    setSize(smallestThatFits?.slug ?? sizes[0]?.slug ?? "")
+                  }}
+                >
+                  <strong>Ordinary box</strong>
+                  <span className="muted small">Billed monthly, sized by what you installed</span>
+                </button>
+                <button
+                  type="button"
+                  className={`choice ${gpuMode ? "on" : ""}`}
+                  onClick={() => {
+                    setGpuMode(true)
+                    setSize(gpuList[0].slug)
+                  }}
+                >
+                  <strong>GPU box</strong>
+                  <span className="muted small">Costs by the hour, from {money(gpuList[0].cents_per_hour)}/hr</span>
+                </button>
+              </div>
+            )}
+            {gpuMode ? (
+              <p className="muted small">
+                Charged by the hour against your balance, from the moment the machine exists until it is asleep or gone.
+                It sleeps itself after an hour with nothing running, and your files stay on its workspace.
+              </p>
+            ) : (
+              <p className="muted small">Your selection needs about {needed} MB once the OS has taken its share.</p>
+            )}
             <div className="choice-grid">
-              {sizes.map(s => {
-                const tight = s.memoryMb < needed || overFreeCeiling(s.slug)
-                const paid = covered(s.slug)
-                const price = billing?.plans.find(p => p.size === s.slug)
-                return (
+              {gpuMode &&
+                gpuList.map(g => (
                   <button
                     type="button"
-                    key={s.slug}
-                    disabled={tight}
-                    className={`choice ${size === s.slug ? "on" : ""} ${tight ? "off" : ""} ${
-                      !tight && !paid ? "needs-sub" : ""
-                    }`}
-                    onClick={() => setSize(s.slug)}
+                    key={g.slug}
+                    className={`choice ${size === g.slug ? "on" : ""}`}
+                    onClick={() => setSize(g.slug)}
                   >
-                    <strong>{s.label}</strong>
-                    <span className="muted small">${price?.monthly ?? s.monthly}/mo</span>
-                    {tight && (
-                      <span className="muted small">
-                        {overFreeCeiling(s.slug) ? "Not available yet" : "Too small for this selection"}
-                      </span>
-                    )}
-                    {!tight && !paid && <span className="muted small">Subscribe to this size</span>}
+                    <strong>{g.label}</strong>
+                    <span className="muted small">{money(g.cents_per_hour)}/hr</span>
+                    <span className="muted small">
+                      {g.vram_gb} GB VRAM · {g.vcpus} vCPU · {Math.round(g.memory_mb / 1024)} GB RAM
+                    </span>
+                    <span className="muted small">
+                      {g.regions.map(slug => catalog.regions.find(r => r.slug === slug)?.label ?? slug).join(", ")}
+                    </span>
                   </button>
-                )
-              })}
+                ))}
+              {!gpuMode &&
+                sizes.map(s => {
+                  const tight = s.memoryMb < needed
+                  return (
+                    <button
+                      type="button"
+                      key={s.slug}
+                      disabled={tight}
+                      className={`choice ${size === s.slug ? "on" : ""} ${tight ? "off" : ""}`}
+                      onClick={() => setSize(s.slug)}
+                    >
+                      <strong>{s.label}</strong>
+                      <span className="muted small">${s.monthly}/mo</span>
+                      {tight && <span className="muted small">Too small for this selection</span>}
+                    </button>
+                  )
+                })}
             </div>
+
+            {gpu && (
+              <p className="note warn">
+                {money(gpu.cents_per_hour)} an hour — about ${perDay.toFixed(2)} a day — on this instance's DigitalOcean
+                account.
+                {capLeft !== null && ` ${money(capLeft)} is left under its cap this month.`} It puts itself to sleep
+                after an hour with nothing running.
+              </p>
+            )}
 
             <h3>Shell</h3>
             <p className="muted small">
@@ -365,12 +427,15 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
                 // Held by a live box: a volume mounts to one machine at a time,
                 // so this is not a thing to discover after paying for a box.
                 const held = w.attached_to !== null
+                // Or in a datacentre this card is not sold in, which cannot be
+                // fixed by moving either half.
+                const elsewhere = Boolean(gpu && !gpu.regions.includes(w.region))
                 return (
                   <button
                     type="button"
                     key={w.id}
-                    disabled={held}
-                    className={`choice ${workspaceId === w.id ? "on" : ""} ${held ? "off" : ""}`}
+                    disabled={held || elsewhere}
+                    className={`choice ${workspaceId === w.id ? "on" : ""} ${held || elsewhere ? "off" : ""}`}
                     onClick={() => {
                       setWorkspaceId(w.id)
                       setNewWorkspace(false)
@@ -381,6 +446,7 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
                       {w.size_gb} GB · {catalog.regions.find(r => r.slug === w.region)?.label ?? w.region}
                     </span>
                     {held && <span className="muted small">On another box</span>}
+                    {!held && elsewhere && <span className="muted small">Not where this card is</span>}
                   </button>
                 )
               })}
@@ -431,23 +497,31 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
                 Fixed to {catalog.regions.find(r => r.slug === chosen.region)?.label ?? chosen.region} by the workspace
                 you picked — storage cannot move between regions.
               </p>
+            ) : gpu ? (
+              <p className="muted small">
+                {gpu.label} is only in{" "}
+                {gpu.regions.map(slug => catalog.regions.find(r => r.slug === slug)?.label ?? slug).join(" and ")} — the
+                cards are where they are.
+              </p>
             ) : (
               <p className="muted small">Pick the one nearest you — it is the round trip you feel.</p>
             )}
             <div className="choice-grid">
-              {catalog.regions.map(r => (
-                <button
-                  type="button"
-                  key={r.slug}
-                  disabled={chosen !== null && r.slug !== chosen.region}
-                  className={`choice ${region === r.slug ? "on" : ""} ${
-                    chosen !== null && r.slug !== chosen.region ? "off" : ""
-                  }`}
-                  onClick={() => setRegion(r.slug)}
-                >
-                  <strong>{r.label}</strong>
-                </button>
-              ))}
+              {catalog.regions.map(r => {
+                const off =
+                  (chosen !== null && r.slug !== chosen.region) || Boolean(gpu && !gpu.regions.includes(r.slug))
+                return (
+                  <button
+                    type="button"
+                    key={r.slug}
+                    disabled={off}
+                    className={`choice ${region === r.slug ? "on" : ""} ${off ? "off" : ""}`}
+                    onClick={() => setRegion(r.slug)}
+                  >
+                    <strong>{r.label}</strong>
+                  </button>
+                )
+              })}
             </div>
           </div>
         )}
@@ -462,7 +536,15 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               <dd>{name.trim() || "box"}</dd>
               <dt>Size</dt>
               <dd>
-                {sizes.find(s => s.slug === size)?.label} · ${sizes.find(s => s.slug === size)?.monthly}/mo
+                {gpu ? (
+                  <>
+                    {gpu.label} · {money(gpu.cents_per_hour)}/hr
+                  </>
+                ) : (
+                  <>
+                    {sizes.find(s => s.slug === size)?.label} · ${sizes.find(s => s.slug === size)?.monthly}/mo
+                  </>
+                )}
               </dd>
               <dt>Shell</dt>
               <dd>{SHELLS[shell].label}</dd>
@@ -481,15 +563,16 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
               <dt>Installing</dt>
               <dd>{resolved.map(t => t.name).join(", ")}</dd>
             </dl>
-            {covered(size) ? (
+            {gpu ? (
+              <p className="note warn">
+                The clock starts when the machine does, not when it is ready — setting up is part of what it costs.
+                About ${perDay.toFixed(2)} a day left running, and it sleeps itself after an hour idle so a forgotten
+                box is a few dollars rather than a few hundred.
+              </p>
+            ) : (
               <p className="note">
                 Setting up takes a few minutes. You can close this — the box will finish on its own and appear in the
                 sidebar when it is ready.
-              </p>
-            ) : (
-              <p className="note warn">
-                Nothing is charged until you subscribe, and the box is created after that. One subscription covers one
-                box of this size.
               </p>
             )}
           </div>
@@ -506,13 +589,9 @@ export const Wizard: React.FC<{ onClose: () => void; onCreated: (id: number) => 
             <button type="button" onClick={() => setStep(step + 1)} disabled={!catalog}>
               Continue
             </button>
-          ) : covered(size) ? (
-            <button type="button" onClick={create} disabled={busy}>
-              {busy ? "Creating…" : "Create box"}
-            </button>
           ) : (
-            <button type="button" onClick={subscribe} disabled={busy}>
-              {busy ? "…" : `Subscribe · $${billing?.plans.find(p => p.size === size)?.monthly}/mo`}
+            <button type="button" onClick={create} disabled={busy}>
+              {busy ? "Creating…" : gpu ? `Create box · ${money(gpu.cents_per_hour)}/hr` : "Create box"}
             </button>
           )}
         </footer>

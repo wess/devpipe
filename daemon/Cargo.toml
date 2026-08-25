@@ -40,9 +40,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util", "fs", "process"] }
 
-# Sinclair's pty and terminal core, unmodified. Path deps for the spike; the
-# same problem devpipecore has, and it wants the same answer.
-pty = { path = "../../sinclair/crates/pty" }
-vt = { path = "../../sinclair/crates/vt" }
+# Sinclair's pty and terminal core, unmodified and pinned to the same released
+# source as the browser/iOS emulator. A clean checkout needs no sibling repo.
+pty = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
+vt = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
 
 [dev-dependencies]

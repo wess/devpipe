@@ -6,15 +6,14 @@ import { useCallback, useEffect, useState } from "react"
  * The app used to hold the current view in `useState` alone. Everything worked
  * until you did what people do with a web page: press Back and leave the app
  * entirely, reload the admin screen and land on the terminals, or try to send
- * somebody a link to the thing you were looking at. Stripe already forced half
- * of this — it sends the browser back to `/billing` — so the choice was one
- * path that mattered and three that lied, or all four telling the truth.
+ * somebody a link to the thing you were looking at. The choice was one path
+ * that mattered and three that lied, or all of them telling the truth.
  *
  * `history` directly, no router dependency. There are four views and one nested
  * tab set; a library for that is more surface than the problem has.
  */
 
-export type View = "workspace" | "runs" | "billing" | "settings" | "vault" | "admin" | "preview" | "watch"
+export type View = "workspace" | "runs" | "spend" | "settings" | "vault" | "admin" | "preview" | "watch"
 
 export const ADMIN_TABS = [
   "overview",
@@ -23,7 +22,6 @@ export const ADMIN_TABS = [
   "waitlist",
   "marketing",
   "invites",
-  "billing",
   "settings",
   "audit",
 ] as const
@@ -65,7 +63,7 @@ export const parse = (pathname: string): Route => {
   // Named rather than left to the fall-through. The default view is the runs
   // now, so without this line the terminals are unreachable by URL.
   if (head === "terminals") return { view: "workspace", tab: DEFAULT_TAB }
-  if (head === "billing") return { view: "billing", tab: DEFAULT_TAB }
+  if (head === "spend") return { view: "spend", tab: DEFAULT_TAB }
   if (head === "settings") return { view: "settings", tab: DEFAULT_TAB }
   if (head === "vault") return { view: "vault", tab: DEFAULT_TAB }
   if (head === "admin") {

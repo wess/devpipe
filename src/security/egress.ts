@@ -1,7 +1,8 @@
 import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
-import * as ocean from "../boxes/digitalocean.ts"
-import { CREDENTIAL, getCredential, getSetting, SETTING } from "../settings/index.ts"
+import { providerFor } from "../providers/index.ts"
+import type { UsageBackend } from "../providers/types.ts"
+import { getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
 
 /**
@@ -91,18 +92,21 @@ export const RELAY_FLOOR_GB = 100
 
 /** Megabits per second, or null when the provider has no reading. */
 const moved = async (
-  token: string,
+  db: Connection,
+  usage: UsageBackend,
   dropletId: string,
   direction: "inbound" | "outbound",
   window: number,
 ): Promise<number | null> => {
   try {
-    return await ocean.bandwidthMbps(token, dropletId, direction, window)
+    return await usage.bandwidthMbps(db, dropletId, direction, window)
   } catch {
     // One unreadable figure must not stop the sweep reaching the rest.
     return null
   }
 }
+
+const gigabytesOver = (mbps: number, windowSeconds: number): number => (mbps * windowSeconds) / 8 / 1000
 
 /**
  * What one box has moved, and whether any of it crosses a line.
@@ -125,15 +129,15 @@ export const verdict = (readings: {
   const { hourlyOut, dailyOut, dailyIn, limitGb, dailyGb } = readings
 
   if (hourlyOut !== null) {
-    const gigabytes = ocean.gigabytesOver(hourlyOut, WINDOW_SECONDS)
+    const gigabytes = gigabytesOver(hourlyOut, WINDOW_SECONDS)
     if (gigabytes > limitGb) {
       return { reason: "burst", gigabytes, received: 0, window: WINDOW_SECONDS }
     }
   }
 
   if (dailyOut === null) return null
-  const sent = ocean.gigabytesOver(dailyOut, DAY_SECONDS)
-  const received = dailyIn === null ? 0 : ocean.gigabytesOver(dailyIn, DAY_SECONDS)
+  const sent = gigabytesOver(dailyOut, DAY_SECONDS)
+  const received = dailyIn === null ? 0 : gigabytesOver(dailyIn, DAY_SECONDS)
 
   if (sent > dailyGb) {
     return { reason: "sustained", gigabytes: sent, received, window: DAY_SECONDS }
@@ -153,9 +157,6 @@ export const verdict = (readings: {
 
 /** Boxes that crossed a line, oldest first. */
 export const heavySenders = async (db: Connection): Promise<Heavy[]> => {
-  const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-  if (!token) return []
-
   const limitGb = Number((await getSetting(db, SETTING.egressLimitGb)) || DEFAULT_LIMIT_GB)
   const dailyGb = Number((await getSetting(db, SETTING.egressDailyGb)) || DEFAULT_DAILY_GB)
   // A limit set to nothing disables the check rather than reporting every box.
@@ -171,14 +172,16 @@ export const heavySenders = async (db: Connection): Promise<Heavy[]> => {
   const heavy: Heavy[] = []
   for (const box of boxes) {
     if (!box.provider_id) continue
+    const provider = providerFor(box.provider)
+    if (!provider.usage || !(await provider.configured(db))) continue
     const id = String(box.provider_id)
     // Three readings per box per hour. Concurrent rather than in sequence
     // because they are independent, and a sweep that takes three round trips
     // per box serially gets slow at exactly the fleet size where it matters.
     const [hourlyOut, dailyOut, dailyIn] = await Promise.all([
-      moved(token, id, "outbound", WINDOW_SECONDS),
-      moved(token, id, "outbound", DAY_SECONDS),
-      moved(token, id, "inbound", DAY_SECONDS),
+      moved(db, provider.usage, id, "outbound", WINDOW_SECONDS),
+      moved(db, provider.usage, id, "outbound", DAY_SECONDS),
+      moved(db, provider.usage, id, "inbound", DAY_SECONDS),
     ])
 
     const found = verdict({ hourlyOut, dailyOut, dailyIn, limitGb, dailyGb })

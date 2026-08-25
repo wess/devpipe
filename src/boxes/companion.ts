@@ -2,6 +2,7 @@ import type { Connection } from "@atlas/db"
 import { from } from "@atlas/db"
 import { get, json, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { boxEndpoint } from "../providers/endpoint.ts"
 
 /**
  * Asylum's companion API, reached through the control plane.
@@ -67,7 +68,7 @@ const tailOf = (path: string, search: string) => {
 }
 
 const forward = async (c: any, box: any, method: string, body?: BodyInit) => {
-  const target = `https://${box.hostname}/companion${tailOf(c.path, new URL(c.request.url).search)}`
+  const target = `${boxEndpoint(box)}/companion${tailOf(c.path, new URL(c.request.url).search)}`
   let res: Response
   try {
     res = await fetch(target, {

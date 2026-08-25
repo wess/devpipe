@@ -6,37 +6,50 @@ import { when } from "../format.ts"
 import { ADMIN_TABS, type AdminTab } from "../routes.ts"
 import { Marketing } from "./Marketing.tsx"
 
+const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
+
 /**
- * Everything only the instance owner sees.
+ * Running the instance.
+ *
+ * An admin sees the people, the boxes and the audit log; an owner sees those
+ * and everything that spends money — the credentials, the prices, the spending
+ * cap. The tabs that are entirely owner-only are not rendered at all rather
+ * than rendered and refused, because a screen you can open and cannot use is a
+ * worse answer than one that is not offered.
  *
  * The tab lives in the URL rather than here. Eight screens behind one address
  * meant no way to link anyone to the one being talked about, and a reload in
- * the middle of configuring Stripe dropped you back on the overview.
+ * the middle of configuring the instance dropped you back on the overview.
  */
+const OWNER_ONLY: AdminTab[] = ["settings", "marketing"]
+
 export const Admin: React.FC<{ tab: AdminTab; onTab: (tab: AdminTab) => void }> = ({ tab, onTab }) => {
   const [note, setNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null)
+  const isOwner = api.currentUser()?.role === "owner"
+  const tabs = ADMIN_TABS.filter(t => isOwner || !OWNER_ONLY.includes(t))
+  // A link to an owner-only tab, followed by somebody who is not one.
+  const showing = tabs.includes(tab) ? tab : "overview"
 
   return (
     <div className="page">
       <h1>Admin</h1>
       <nav className="tabs">
-        {ADMIN_TABS.map(t => (
-          <button type="button" key={t} className={tab === t ? "on" : ""} onClick={() => onTab(t)}>
+        {tabs.map(t => (
+          <button type="button" key={t} className={showing === t ? "on" : ""} onClick={() => onTab(t)}>
             {t}
           </button>
         ))}
       </nav>
       {note && <p className={`note ${note.kind === "bad" ? "bad" : "ok"}`}>{note.text}</p>}
 
-      {tab === "overview" && <Overview />}
-      {tab === "users" && <Users onNote={setNote} />}
-      {tab === "boxes" && <Droplets />}
-      {tab === "waitlist" && <Waitlist />}
-      {tab === "marketing" && <Marketing onNote={setNote} />}
-      {tab === "invites" && <Invites onNote={setNote} />}
-      {tab === "settings" && <InstanceSettings onNote={setNote} />}
-      {tab === "billing" && <Billing onNote={setNote} />}
-      {tab === "audit" && <Audit />}
+      {showing === "overview" && <Overview />}
+      {showing === "users" && <Users onNote={setNote} canManage={isOwner} />}
+      {showing === "boxes" && <Droplets />}
+      {showing === "waitlist" && <Waitlist />}
+      {showing === "marketing" && <Marketing onNote={setNote} />}
+      {showing === "invites" && <Invites onNote={setNote} />}
+      {showing === "settings" && <InstanceSettings onNote={setNote} />}
+      {showing === "audit" && <Audit />}
     </div>
   )
 }
@@ -88,10 +101,15 @@ const Waitlist: React.FC = () => {
 
 const Overview: React.FC = () => {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.adminOverview>> | null>(null)
+  const [cap, setCap] = useState<api.Cap | null>(null)
   useEffect(() => {
     api
       .adminOverview()
       .then(setData)
+      .catch(() => {})
+    api
+      .spendCap()
+      .then(setCap)
       .catch(() => {})
   }, [])
   if (!data) return <Loader2 className="spin" size={16} />
@@ -112,6 +130,35 @@ const Overview: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {/* What the provider will actually charge, accumulated over its own
+          billing month. Counted from droplets and volumes both — a figure that
+          left volumes out would read low and be trusted anyway. */}
+      {cap && (
+        <div className="card">
+          <h2>Spending this month</h2>
+          <div className="price">
+            {money(cap.spent_cents)}
+            <span>{cap.cap_cents > 0 ? ` of ${money(cap.cap_cents)}` : " — no cap set"}</span>
+          </div>
+          <p className="muted small">
+            Running at {money(Math.round(cap.run_rate_cents_per_hour))} an hour
+            {cap.reached_at ? `, which reaches the cap ${when(cap.reached_at)}` : ""}. Since {when(cap.period_start)}.
+          </p>
+          {cap.over && (
+            <p className="note bad">
+              The cap has been reached. Nothing new will start, and running boxes are being put to sleep onto their
+              workspaces.
+            </p>
+          )}
+          {!cap.over && cap.warning && (
+            <p className="note warn">
+              Past {cap.warn_at_pct}% of the cap. At the current rate the instance stops starting machines
+              {cap.reached_at ? ` ${when(cap.reached_at)}` : " shortly"}.
+            </p>
+          )}
+        </div>
+      )}
       {!data.provider_configured && (
         <p className="note warn">
           No provider is connected, so nobody can create a box. Add a DigitalOcean token under Settings.
@@ -122,7 +169,20 @@ const Overview: React.FC = () => {
   )
 }
 
-const Users: React.FC<{ onNote: (n: { kind: "ok" | "bad"; text: string }) => void }> = ({ onNote }) => {
+const ROLE_LABEL: Record<api.Role, string> = { owner: "Owner", admin: "Admin", user: "Member" }
+
+/**
+ * The team.
+ *
+ * Roles are only offered to the owner, because only the owner may set them.
+ * The owner row has no controls at all: there is exactly one, and moving it is
+ * a transfer rather than an edit — which is what the confirmation says, since
+ * the person doing it stops being able to undo it the moment it lands.
+ */
+const Users: React.FC<{ onNote: (n: { kind: "ok" | "bad"; text: string }) => void; canManage: boolean }> = ({
+  onNote,
+  canManage,
+}) => {
   const [rows, setRows] = useState<Awaited<ReturnType<typeof api.adminUsers>>>([])
   const refresh = useCallback(
     () =>
@@ -142,6 +202,7 @@ const Users: React.FC<{ onNote: (n: { kind: "ok" | "bad"; text: string }) => voi
         <thead>
           <tr>
             <th>User</th>
+            <th>Role</th>
             <th>Boxes</th>
             <th>Joined</th>
             <th />
@@ -158,6 +219,42 @@ const Users: React.FC<{ onNote: (n: { kind: "ok" | "bad"; text: string }) => voi
                 <div className="muted small">
                   {u.email} · @{u.username}
                 </div>
+              </td>
+              <td>
+                {u.is_owner || !canManage ? (
+                  <span className="muted small">{ROLE_LABEL[u.role]}</span>
+                ) : (
+                  <select
+                    value={u.role}
+                    disabled={Boolean(u.suspended_at)}
+                    onChange={async e => {
+                      const role = e.target.value as api.Role
+                      if (
+                        role === "owner" &&
+                        !confirm(
+                          `Hand this instance to ${u.email}?\n\nThere is only one owner. You become an admin, and everything owner-only — the provider token, the payment keys, the spending cap — stops being yours to change.`,
+                        )
+                      ) {
+                        return
+                      }
+                      try {
+                        const out = await api.adminSetRole(u.id, role)
+                        onNote(
+                          out.transferred
+                            ? { kind: "ok", text: `${u.email} owns this instance now. You are an admin.` }
+                            : { kind: "ok", text: `${u.email} is now ${ROLE_LABEL[role].toLowerCase()}.` },
+                        )
+                        void refresh()
+                      } catch (err: any) {
+                        onNote({ kind: "bad", text: String(err.message) })
+                      }
+                    }}
+                  >
+                    <option value="user">Member</option>
+                    <option value="admin">Admin</option>
+                    <option value="owner">Owner — hand over</option>
+                  </select>
+                )}
               </td>
               <td>{u.boxes}</td>
               <td className="muted small">{when(u.created_at)}</td>
@@ -326,10 +423,10 @@ const InstanceSettings: React.FC<{
             is readable in one is not a detail to keep to ourselves. */}
         {data.secrets_sealed === false && (
           <p className="note warn">
-            Provider and Stripe credentials are stored <strong>unencrypted</strong>, because
+            The provider token is stored <strong>unencrypted</strong>, because
             <code> DEVPIPE_SECRET_KEY</code> is not set on this instance. Generate one with
-            <code> openssl rand -base64 32</code>, add it to <code>/etc/devpipe.env</code>, and restart —
-            existing values are encrypted the next time they are read.
+            <code> openssl rand -base64 32</code>, add it to <code>/etc/devpipe.env</code>, and restart — existing
+            values are encrypted the next time they are read.
           </p>
         )}
         {data.provider.digitalocean && (
@@ -375,141 +472,34 @@ const InstanceSettings: React.FC<{
           "Gigabytes out in a day. Catches the patient version the hourly figure is blind to. 0 turns the check off.",
         )}
       </section>
-    </>
-  )
-}
 
-const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
-
-const Billing: React.FC<{ onNote: (n: { kind: "ok" | "bad"; text: string }) => void }> = ({ onNote }) => {
-  const [data, setData] = useState<Awaited<ReturnType<typeof api.adminBilling>> | null>(null)
-  const [margin, setMargin] = useState("")
-  const [secret, setSecret] = useState("")
-  const [hook, setHook] = useState("")
-
-  const refresh = useCallback(
-    () =>
-      api
-        .adminBilling()
-        .then(d => {
-          setData(d)
-          setMargin(String(d.margin_pct))
-        })
-        .catch(() => {}),
-    [],
-  )
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-  if (!data) return <Loader2 className="spin" size={16} />
-
-  const save = async (values: Parameters<typeof api.adminSaveBilling>[0]) => {
-    try {
-      const out = await api.adminSaveBilling(values)
-      setSecret("")
-      setHook("")
-      onNote({ kind: "ok", text: out.changed.length ? `Saved: ${out.changed.join(", ")}.` : "Nothing changed." })
-      void refresh()
-    } catch (err: any) {
-      onNote({ kind: "bad", text: String(err.message) })
-    }
-  }
-
-  // Previewed from the number in the box rather than from the saved one, so
-  // the effect of a margin is visible before it is charged to anybody.
-  const preview = Number(margin)
-  const multiplier = Number.isFinite(preview) && preview >= 0 ? 1 + preview / 100 : 1
-
-  return (
-    <>
       <section className="card">
-        <h2>Stripe</h2>
-        {!data.configured && (
-          <p className="note warn">
-            Until both keys are here, nobody can subscribe and nothing gates a box. The instance sells nothing and
-            creating a box is free.
-          </p>
-        )}
-        {data.livemode !== null && (
-          <p className={`note ${data.livemode ? "warn" : ""}`}>
-            {data.livemode ? "Live keys — these charge real cards." : "Test keys — nothing here moves money."}
-          </p>
-        )}
-        <p className="note">
-          The webhook endpoint is <code>/api/billing/webhook</code>. Subscribe it to checkout.session.completed and the
-          three customer.subscription events; a subscription only exists once one of those arrives.
+        <h2>Spending</h2>
+        <p className="muted small">
+          The provider's own prices, droplets and volumes both, accumulated over the calendar month. Past the cap
+          nothing new starts and what is running is put to sleep onto its workspace — which is safe precisely because a
+          box without a workspace is never touched.
         </p>
-        <form
-          onSubmit={e => {
-            e.preventDefault()
-            void save({
-              // An empty field means leave it alone, so a key already stored
-              // does not have to be pasted again to change the other one.
-              ...(secret.trim() ? { secret_key: secret.trim() } : {}),
-              ...(hook.trim() ? { webhook_secret: hook.trim() } : {}),
-            })
-          }}
-        >
-          <label className="field">
-            <span>Secret key{data.secret_key && ` — currently ${data.secret_key}`}</span>
-            <input
-              type="password"
-              value={secret}
-              onChange={e => setSecret(e.target.value)}
-              placeholder={data.secret_key ?? "sk_live_…"}
-              autoComplete="off"
-            />
-            <small className="muted">Checked against Stripe before it is stored.</small>
-          </label>
-          <label className="field">
-            <span>Webhook signing secret{data.webhook_secret && ` — currently ${data.webhook_secret}`}</span>
-            <input
-              type="password"
-              value={hook}
-              onChange={e => setHook(e.target.value)}
-              placeholder={data.webhook_secret ?? "whsec_…"}
-              autoComplete="off"
-            />
-          </label>
-          <button type="submit" disabled={!secret.trim() && !hook.trim()}>
-            Save keys
-          </button>
-        </form>
+        {field(
+          "billing_spend_cap_cents",
+          "Monthly cap, in cents",
+          "0 is no cap. 5000 is fifty dollars. Counted against what DigitalOcean charges, not what customers are charged.",
+        )}
+        {field("billing_spend_warn_pct", "Start warning at", "A percentage of the cap. 80 is four fifths of it.")}
       </section>
 
       <section className="card">
-        <h2>Margin</h2>
-        <form
-          onSubmit={e => {
-            e.preventDefault()
-            void save({ margin_pct: Number(margin) })
-          }}
-        >
-          <label className="field">
-            <span>Percent on top of provider cost</span>
-            <input value={margin} onChange={e => setMargin(e.target.value)} inputMode="decimal" />
-            <small className="muted">100 means the customer pays double what the droplet costs.</small>
-          </label>
-          <table>
-            <thead>
-              <tr>
-                <th>Size</th>
-                <th className="right">Cost</th>
-                <th className="right">Price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.plans.map(p => (
-                <tr key={p.size}>
-                  <td>{p.label}</td>
-                  <td className="right muted">{money(p.cost_cents)}</td>
-                  <td className="right">{money(Math.round(p.cost_cents * multiplier))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button type="submit">Save margin</button>
-        </form>
+        <h2>GPU boxes</h2>
+        <p className="muted small">
+          Hourly machines, from $0.76 to $4.41 an hour at DigitalOcean's own prices. Off until this says otherwise, and
+          even then only an admin can start one — the bill lands on this instance's provider account.
+        </p>
+        {field("boxes_gpu_enabled", "Offer GPU boxes", "1 to show them in the wizard, 0 to hide them.")}
+        {field(
+          "boxes_gpu_idle_hours",
+          "Sleep a GPU box after",
+          "Hours idle. Unlike the other idle settings this cannot be turned off — below 1 is read as 1.",
+        )}
       </section>
     </>
   )

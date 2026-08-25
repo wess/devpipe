@@ -47,11 +47,13 @@ describe("credentials at rest", () => {
   })
 
   test("a sealed value cannot be moved into another row", async () => {
-    // Encryption stops a value being read. Only binding stops it being *moved* —
-    // without it, the Stripe key could be copied into the provider row and the
-    // instance would decrypt it happily and hand it to DigitalOcean.
-    await setCredential(db, CREDENTIAL.stripeSecretKey, "sk_live_notthedotoken")
-    const sealed = await stored(CREDENTIAL.stripeSecretKey)
+    // Encryption stops a value being read. Only binding stops it being *moved*
+    // — without it, any sealed value in this table could be copied into the
+    // provider row and the instance would decrypt it happily and hand it to
+    // DigitalOcean.
+    const OTHER = "some_other_credential"
+    await setCredential(db, OTHER, "not-the-provider-token")
+    const sealed = await stored(OTHER)
     await db.execute(
       from("credentials")
         .where(q => q("key").equals(CREDENTIAL.digitalOceanToken))
@@ -60,7 +62,7 @@ describe("credentials at rest", () => {
     await db.execute(from("credentials").insert({ key: CREDENTIAL.digitalOceanToken, value: sealed }))
 
     expect(await getCredential(db, CREDENTIAL.digitalOceanToken)).toBeNull()
-    expect(await getCredential(db, CREDENTIAL.stripeSecretKey)).toBe("sk_live_notthedotoken")
+    expect(await getCredential(db, OTHER)).toBe("not-the-provider-token")
   })
 
   test("a value written before this existed still opens, and stops being plaintext", async () => {

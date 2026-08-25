@@ -15,6 +15,7 @@ import { db, truncateAll } from "./setup.ts"
 const realFetch = globalThis.fetch
 let destroyed: number[] = []
 let detached: string[] = []
+let attachedDroplet = 0
 
 const stubOcean = () => {
   globalThis.fetch = (async (input: any, init: any = {}) => {
@@ -25,6 +26,17 @@ const stubOcean = () => {
     const reply = (d: unknown, s = 200) =>
       new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } })
 
+    if (path === "/volumes/vol-1" && method === "GET") {
+      return reply({
+        volume: {
+          id: "vol-1",
+          name: "dp-1-main",
+          region: { slug: "nyc3" },
+          size_gigabytes: 10,
+          droplet_ids: attachedDroplet ? [attachedDroplet] : [],
+        },
+      })
+    }
     if (path.startsWith("/volumes/") && path.endsWith("/actions") && method === "POST") {
       detached.push(path.split("/")[2] as string)
       return reply({ action: { id: 1, status: "completed" } }, 201)
@@ -42,7 +54,11 @@ let userId = 0
 let workspaceId = 0
 
 /** A box that has been sitting unused for `hours`. */
-const boxAged = async (hours: number, opts: { workspace?: boolean; status?: string; name?: string } = {}) => {
+const boxAged = async (
+  hours: number,
+  opts: { workspace?: boolean; status?: string; name?: string; size?: string } = {},
+) => {
+  attachedDroplet = 1000 + hours
   const rows = (await db.execute(
     from("boxes")
       .insert({
@@ -50,7 +66,7 @@ const boxAged = async (hours: number, opts: { workspace?: boolean; status?: stri
         name: opts.name ?? `box-${hours}`,
         hostname: `${opts.name ?? `box-${hours}`}.devpipe.com`,
         region: "nyc3",
-        size: "s-1vcpu-1gb",
+        size: opts.size ?? "s-1vcpu-1gb",
         status: opts.status ?? "ready",
         provider_id: String(1000 + hours),
         agent_token: "tok",
@@ -67,6 +83,7 @@ beforeEach(async () => {
   await truncateAll()
   destroyed = []
   detached = []
+  attachedDroplet = 0
   stubOcean()
   setLiveSessions(async () => [])
   await setCredential(db, CREDENTIAL.digitalOceanToken, "dop_v1_test")
@@ -219,43 +236,95 @@ describe("what it does reclaim", () => {
   })
 })
 
-describe("boxes nobody is paying for", () => {
-  /** A subscription covering a box is what makes it "paid" here. */
-  const cover = async (boxId: number) => {
+/**
+ * Whose money is at stake.
+ *
+ * Not a judgement about who matters. The owner's idle box costs the owner and
+ * they can see it; somebody else's experiment costs the owner too and they
+ * cannot, which is why it is the one that sleeps sooner.
+ */
+describe("somebody else's box, and the owner's own", () => {
+  /** Hands a box to the person who owns the instance. */
+  const toOwner = async (boxId: number) => {
+    const rows = (await db.execute(
+      from("users")
+        .insert({ email: "boss@b.co", username: "boss", password: "x", role: "owner" })
+        .returning("id"),
+    )) as any[]
     await db.execute(
-      from("subscriptions").insert({
-        user_id: userId,
-        box_id: boxId,
-        size: "s-1vcpu-1gb",
-        status: "active",
-        stripe_subscription_id: `sub_${boxId}`,
-      }),
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .update({ user_id: rows[0].id }),
     )
   }
 
-  test("an unpaid box sleeps on the shorter free window", async () => {
+  test("somebody else's sleeps on the shorter window", async () => {
     await setSetting(db, SETTING.idleHours, "24")
     await setSetting(db, SETTING.freeIdleHours, "1")
     await boxAged(3, { name: "trial" })
     const idle = await idleBoxes(db, 24, 1)
-    // Three hours idle: past the free hour, nowhere near the paid day.
+    // Three hours idle: past the short hour, nowhere near the long day.
     expect(idle).toHaveLength(1)
     expect(idle[0]?.name).toBe("trial")
   })
 
-  test("a paid box keeps the longer window", async () => {
+  test("the owner's keeps the longer one", async () => {
     await setSetting(db, SETTING.idleHours, "24")
     await setSetting(db, SETTING.freeIdleHours, "1")
-    const id = await boxAged(3, { name: "paid" })
-    await cover(id)
+    const id = await boxAged(3, { name: "theirs" })
+    await toOwner(id)
     expect(await idleBoxes(db, 24, 1)).toHaveLength(0)
   })
 
-  test("free hours alone still work when the paid window is off", async () => {
+  test("the short window alone still works when the long one is off", async () => {
     await setSetting(db, SETTING.idleHours, "0")
     await setSetting(db, SETTING.freeIdleHours, "2")
     await boxAged(5)
     expect(await reclaimIdle(db)).toHaveLength(1)
+  })
+})
+
+/**
+ * The one window with no off switch.
+ *
+ * An idle CPU box is four dollars a month of somebody's patience. An idle H100
+ * is four dollars an hour, and the box that ran a job on Friday and was
+ * forgotten is the ordinary case — so the setting that turns idle reclaim off
+ * for everything else does not reach these.
+ */
+describe("boxes billed by the hour", () => {
+  const GPU = "gpu-4000adax1-20gb"
+
+  test("slept even with idle reclaim switched off entirely", async () => {
+    await setSetting(db, SETTING.idleHours, "0")
+    await setSetting(db, SETTING.freeIdleHours, "0")
+    await boxAged(3, { name: "card", size: GPU })
+    const slept = await reclaimIdle(db)
+    expect(slept.map(b => b.name)).toEqual(["card"])
+    expect(destroyed).toHaveLength(1)
+  })
+
+  test("and the hours are the GPU ones, not the instance's", async () => {
+    await setSetting(db, SETTING.idleHours, "48")
+    await setSetting(db, SETTING.gpuIdleHours, "6")
+    const recent = await boxAged(3, { name: "recent", size: GPU })
+    expect(await idleBoxes(db, 48, 0, 6)).toHaveLength(0)
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(recent))
+        .update({ destroyed_at: new Date() }),
+    )
+    await boxAged(8, { name: "forgotten", size: GPU, workspace: true })
+    expect((await idleBoxes(db, 48, 0, 6)).map(b => b.name)).toEqual(["forgotten"])
+  })
+
+  // The rule the whole feature rests on applies here too: a box holding the
+  // only copy of somebody's work is never taken away, whatever it costs.
+  test("still never one without a workspace", async () => {
+    await setSetting(db, SETTING.idleHours, "0")
+    await boxAged(500, { workspace: false, size: GPU })
+    expect(await reclaimIdle(db)).toHaveLength(0)
+    expect(destroyed).toHaveLength(0)
   })
 })
 
@@ -295,18 +364,19 @@ describe("trials nobody came back to", () => {
     expect(await expireDormant(db)).toBe(0)
   })
 
-  // Somebody's files are not something to tidy up on a timer because they
-  // stopped using a box for a month.
-  test("never a box somebody is paying for", async () => {
+  // The only thing here that destroys data. The person who installed the
+  // instance is not somebody whose files get tidied up on a timer.
+  test("never the owner's own box", async () => {
     const id = await asleep(90)
+    const rows = (await db.execute(
+      from("users")
+        .insert({ email: "boss@b.co", username: "boss", password: "x", role: "owner" })
+        .returning("id"),
+    )) as any[]
     await db.execute(
-      from("subscriptions").insert({
-        user_id: userId,
-        box_id: id,
-        size: "s-1vcpu-1gb",
-        status: "active",
-        stripe_subscription_id: "sub_paid",
-      }),
+      from("boxes")
+        .where(q => q("id").equals(id))
+        .update({ user_id: rows[0].id }),
     )
     await setSetting(db, SETTING.dormantDays, "30")
     expect(await expireDormant(db)).toBe(0)

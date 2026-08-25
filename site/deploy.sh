@@ -14,6 +14,36 @@ NAME="$(basename "$ROOT")"
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "root@$HOST")
 SCP=(-i "$KEY" -o StrictHostKeyChecking=accept-new)
 
+echo "==> production preflight + database backup"
+"${SSH[@]}" 'bash -s' <<'EOF'
+set -euo pipefail
+test -s /etc/devpipe.env || { echo "/etc/devpipe.env is missing" >&2; exit 1; }
+grep -q '^DATABASE_URL=' /etc/devpipe.env || { echo "DATABASE_URL is missing from /etc/devpipe.env" >&2; exit 1; }
+grep -q '^DEVPIPE_SECRET_KEY=' /etc/devpipe.env || { echo "DEVPIPE_SECRET_KEY is missing from /etc/devpipe.env" >&2; exit 1; }
+command -v pg_dump >/dev/null || { echo "pg_dump is required for a safe deploy" >&2; exit 1; }
+command -v psql >/dev/null || { echo "psql is required for migration preflight" >&2; exit 1; }
+set -a
+. /etc/devpipe.env
+set +a
+DUPLICATE_WORKSPACES="$(psql "$DATABASE_URL" -Atqc '
+  SELECT workspace_id
+  FROM boxes
+  WHERE workspace_id IS NOT NULL AND destroyed_at IS NULL
+  GROUP BY workspace_id
+  HAVING COUNT(*) > 1
+  LIMIT 10
+')"
+if [ -n "$DUPLICATE_WORKSPACES" ]; then
+  echo "live boxes share workspace ids; migration 32 cannot add its safety lock: $DUPLICATE_WORKSPACES" >&2
+  exit 1
+fi
+install -d -m 0700 /var/backups/devpipe
+BACKUP="/var/backups/devpipe/predeploy-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+pg_dump "$DATABASE_URL" | gzip -9 > "$BACKUP"
+test -s "$BACKUP"
+echo "database backup: $BACKUP"
+EOF
+
 echo "==> vt.wasm"
 (cd "$ROOT/core" && cargo build --release --target wasm32-unknown-unknown >/dev/null)
 
@@ -45,7 +75,7 @@ fi
 
 echo "==> bundling the app"
 cd "$ROOT"
-bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
+bun install --frozen-lockfile >/dev/null
 # Standalone executables: the box runs one binary each for api and web with no
 # node_modules to keep in sync, which matters on a machine chosen to be small.
 bun build --compile --minify --target=bun-linux-x64 src/server.ts --outfile /tmp/devpipe-api >/dev/null
@@ -64,7 +94,7 @@ echo "==> uploading"
 # inline so that script-src can refuse 'unsafe-inline'; leaving it behind gives
 # a page whose claim form silently does nothing.
 for page in index.html terms.html privacy.html aup.html lander.js \
-            asylum.html asylum-docs.html asylum-class.html asylum.css; do
+            asylum.html asylum-docs.html asylum-class.html asylum.css self-host.html; do
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/var/www/devpipe/$page"
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/opt/devpipe/site/$page"
 done
@@ -99,6 +129,8 @@ scp "${SCP[@]}" -qr "$ROOT/src/web/dist/." "root@$HOST:/opt/devpipe/src/web/dist
 
 "${SSH[@]}" "bash -s" <<'EOF'
 set -euo pipefail
+cp -a /usr/local/bin/devpipe-api /usr/local/bin/devpipe-api.previous 2>/dev/null || true
+cp -a /usr/local/bin/devpipe-web /usr/local/bin/devpipe-web.previous 2>/dev/null || true
 install -m 0755 /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-api
 install -m 0755 /usr/local/bin/devpipe-web.new /usr/local/bin/devpipe-web
 rm -f /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-web.new
@@ -163,6 +195,7 @@ UNIT
 unit devpipe-api "Devpipe API" /usr/local/bin/devpipe-api \
 "Environment=PORT=3000
 Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
 Environment=APP_URL=https://devpipe.com
 Environment=BOX_DOMAIN=devpipe.com"
 
@@ -196,8 +229,24 @@ systemctl daemon-reload
 chown -R caddy:caddy /var/www/devpipe
 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 && echo "caddy ok"
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
-sleep 3
+ready=0
+for _ in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:3000/ready >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "new API did not become ready; restoring the previous binaries" >&2
+  test -x /usr/local/bin/devpipe-api.previous && install -m 0755 /usr/local/bin/devpipe-api.previous /usr/local/bin/devpipe-api
+  test -x /usr/local/bin/devpipe-web.previous && install -m 0755 /usr/local/bin/devpipe-web.previous /usr/local/bin/devpipe-web
+  systemctl restart devpipe-api devpipe-web
+  exit 1
+fi
 echo "services: $(systemctl is-active devpipe-api devpipe-web caddy | tr '\n' ' ')"
 EOF
 
+curl -fsS "https://$HOST/" >/dev/null
+curl -fsS "https://$HOST/api/ready" >/dev/null
 echo "==> https://devpipe.com  ·  app at /runs"

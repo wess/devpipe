@@ -11,6 +11,7 @@ import { checkUsername, isEmail, normaliseUsername } from "../util/username.ts"
 import { clearedCookie, sessionCookie } from "./cookie.ts"
 import { agentClass } from "./fingerprint.ts"
 import { requireAuth } from "./guard.ts"
+import { asRole } from "./roles.ts"
 
 const SESSION_DAYS = 30
 
@@ -54,7 +55,10 @@ const publicUser = (row: any) => ({
   email: row.email,
   username: row.username,
   name: row.name,
-  is_owner: Boolean(row.is_owner),
+  role: asRole(row.role),
+  // Kept alongside the role because every client already branches on it, and
+  // because it is the question most of them are actually asking.
+  is_owner: asRole(row.role) === "owner",
 })
 
 export const authRoutes = (db: Connection) => {
@@ -84,6 +88,7 @@ export const authRoutes = (db: Connection) => {
       const needsOwner = Number(row?.n ?? 0) === 0
       return json(c, 200, {
         needs_owner: needsOwner,
+        setup_token_required: needsOwner && Boolean(process.env.DEVPIPE_SETUP_TOKEN),
         // Lets the sign-in page ask for a code up front, instead of letting
         // someone fill in a whole form only to be refused at the end.
         invite_required: !needsOwner && (await getSetting(db, SETTING.signupsOpen)) !== "1",
@@ -99,6 +104,7 @@ export const authRoutes = (db: Connection) => {
           name?: string
           password?: string
           invite?: string
+          setup_token?: string
         }
         const email = b.email?.trim().toLowerCase() ?? ""
         const username = normaliseUsername(b.username ?? "")
@@ -123,6 +129,10 @@ export const authRoutes = (db: Connection) => {
         // to be able to claim a fresh instance.
         const existing = (await db.one(from("users").select("COUNT(*) AS n"))) as any
         const isFirst = Number(existing?.n ?? 0) === 0
+        const setupToken = process.env.DEVPIPE_SETUP_TOKEN ?? ""
+        if (isFirst && setupToken && String(b.setup_token ?? "") !== setupToken) {
+          return json(c, 403, { error: "That setup token is not valid." })
+        }
         let invite: any = null
         if (!isFirst) {
           const open = (await getSetting(db, SETTING.signupsOpen)) === "1"
@@ -150,8 +160,9 @@ export const authRoutes = (db: Connection) => {
         if (taken) return json(c, 409, { error: "That email is already registered." })
         if (takenName) return json(c, 409, { error: "That username is taken." })
 
-        // First account in is the owner. There is no other way to become one,
-        // which is what makes a fresh instance claimable exactly once.
+        // First account in is the owner. There is no other way to become one
+        // except a deliberate transfer from the owner themselves, which is what
+        // makes a fresh instance claimable exactly once.
         const isOwner = isFirst
 
         const rows = (await db.execute(
@@ -161,9 +172,9 @@ export const authRoutes = (db: Connection) => {
               username,
               name: b.name?.trim().slice(0, 80) || username,
               password: await hash(password),
-              is_owner: isOwner ? 1 : 0,
+              role: isOwner ? "owner" : "user",
             })
-            .returning("id", "email", "username", "name", "is_owner"),
+            .returning("id", "email", "username", "name", "role"),
         )) as any[]
 
         const user = rows[0]

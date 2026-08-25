@@ -147,11 +147,11 @@ describe("the sweep", () => {
 })
 
 describe("abuse", () => {
-  const makeUser = async (email: string, username: string, isOwner = 0) => {
+  const makeUser = async (email: string, username: string, role = "user") => {
     const rows = (await db.execute({
-      text: `INSERT INTO users (email, username, password, is_owner)
+      text: `INSERT INTO users (email, username, password, role)
              VALUES ($1, $2, 'x', $3) RETURNING id`,
-      values: [email, username, isOwner],
+      values: [email, username, role],
     } as any)) as any[]
     return rows[0].id as number
   }
@@ -262,7 +262,7 @@ describe("abuse", () => {
   })
 
   test("the owner cannot be suspended", async () => {
-    const bossId = await makeUser("boss@example.com", "boss", 1)
+    const bossId = await makeUser("boss@example.com", "boss", "owner")
     const out = await suspendUser(db, bossId, "mistake")
     expect(out.ok).toBe(false)
     expect(out.error).toContain("owner")

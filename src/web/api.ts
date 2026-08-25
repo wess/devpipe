@@ -1,10 +1,14 @@
 const BASE = "/api"
 
+export type Role = "owner" | "admin" | "user"
+
 export type User = {
   id: number
   email: string
   username: string
   name: string
+  role: Role
+  /** `role === "owner"`, kept because most screens are asking exactly that. */
   is_owner: boolean
 }
 
@@ -62,11 +66,34 @@ export type Tool = {
   launch?: string[]
 }
 
+/**
+ * A GPU size, as the provider offers it today.
+ *
+ * Separate from `sizes` rather than mixed in, because everything about it is
+ * different: the price that matters is per hour rather than per month, and it
+ * exists in one or two datacentres rather than everywhere. Empty when the
+ * instance has GPU switched off, and admin-only even when it is not.
+ */
+export type GpuSize = {
+  slug: string
+  label: string
+  memory_mb: number
+  vcpus: number
+  disk_gb: number
+  vram_gb: number
+  count: number
+  vendor: "nvidia" | "amd"
+  cents_per_hour: number
+  regions: string[]
+}
+
 export type Catalog = {
   tools: Tool[]
   sizes: { slug: string; label: string; memoryMb: number; monthly: number }[]
+  gpu_sizes: GpuSize[]
   regions: { slug: string; label: string }[]
   defaults: string[]
+  provider: "digitalocean" | "docker"
 }
 
 /**
@@ -144,7 +171,8 @@ const call = async <T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T
 }
 
-export const authState = () => call<{ needs_owner: boolean; invite_required: boolean }>("GET", "/auth/state")
+export const authState = () =>
+  call<{ needs_owner: boolean; invite_required: boolean; setup_token_required: boolean }>("GET", "/auth/state")
 
 /**
  * Whether a username is free, for showing while someone types.
@@ -165,6 +193,7 @@ export const register = async (input: {
   name?: string
   password: string
   invite?: string
+  setup_token?: string
 }) => {
   // The token in the body is for iOS and dpctl, which keep theirs in a
   // keychain. This client is handed a cookie it cannot read, and deliberately
@@ -369,34 +398,84 @@ export const boxEvents = (id: number, after = 0) =>
 export const connection = (id: number) =>
   call<{ url: string; token: string; expiresIn: number }>("GET", `/boxes/${id}/connection`)
 
-export type Plan = { size: string; label: string; price_cents: number; monthly: number }
-
-export type Subscription = {
+/** What this account's machines have cost the instance this month. */
+export type SpendEntry = {
   id: number
-  status: string
-  size: string
-  label: string
-  box_id: number | null
-  current_period_end: string | null
-  cancel_at_period_end: boolean
+  cents: number
+  kind: "box" | "workspace"
+  note: string
+  created_at: string
 }
 
-export type BillingStatus = {
-  configured: boolean
-  margin_pct: number
-  currency: string
-  plans: Plan[]
-  subscriptions: Subscription[]
-  /** Size slugs this user can create a box at right now. */
-  can_create: string[]
-  /** While nothing is charged, the largest size a guest may take. Null once billing exists. */
-  free_max_size?: string | null
+export type MySpend = {
+  spent_cents: number
+  run_rate_cents_per_hour: number
+  period_start: string
+  /** The instance's monthly ceiling, or 0 for none. */
+  cap_cents: number
+  instance_spent_cents: number
+  entries: SpendEntry[]
 }
 
-export const billingStatus = () => call<BillingStatus>("GET", "/billing/status")
-export const billingCheckout = (size: string) =>
-  call<{ url: string; size: string; price_cents: number }>("POST", "/billing/checkout", { size })
-export const billingPortal = () => call<{ url: string }>("GET", "/billing/portal")
+export const mySpend = () => call<MySpend>("GET", "/spend/mine")
+
+/** What the instance as a whole is spending, and the ceiling on it. */
+export type Cap = {
+  cap_cents: number
+  spent_cents: number
+  run_rate_cents_per_hour: number
+  used: number
+  warn_at_pct: number
+  warning: boolean
+  over: boolean
+  reached_at: string | null
+  period_start: string
+}
+
+export const spendCap = () => call<Cap>("GET", "/admin/spend")
+
+// ---- first launch ---------------------------------------------------------
+
+export type SetupStep = {
+  id: "owner" | "secret" | "provider" | "domain" | "keys" | "cap"
+  title: string
+  done: boolean
+  required: boolean
+  detail: string
+}
+
+export type SetupState = {
+  claimed: boolean
+  /** Every required step is done — the instance can build a box. */
+  usable: boolean
+  /** …and somebody has read the last screen. */
+  complete: boolean
+  acknowledged: boolean
+  steps: SetupStep[]
+  account: { email: string; dropletLimit: number } | null
+  provider_error: string | null
+  domain: string
+  domain_on_account: boolean
+  ssh_key_count: number
+  spend_cap_cents: number
+  sealed: boolean
+}
+
+export const setupState = () => call<SetupState>("GET", "/setup/state")
+export const setupSecret = () => call<{ key: string; sealed: boolean; path: string }>("GET", "/setup/secret")
+export const setupProvider = (token: string) =>
+  call<{ ok: boolean; account: { email: string; dropletLimit: number }; domains: string[] }>(
+    "POST",
+    "/setup/provider",
+    { token },
+  )
+export const setupDomain = (domain: string) =>
+  call<{ ok: boolean; domain: string }>("POST", "/setup/domain", { domain })
+export const setupSshKeys = () =>
+  call<{ keys: { id: number; name: string }[]; chosen: string[] }>("GET", "/setup/ssh-keys")
+export const saveSetupSshKeys = (ids: number[]) => call<{ ok: boolean }>("POST", "/setup/ssh-keys", { ids })
+export const setupCap = (cents: number) => call<{ ok: boolean }>("POST", "/setup/cap", { cents })
+export const setupFinish = () => call<{ ok: boolean }>("POST", "/setup/finish", {})
 
 export const adminOverview = () =>
   call<{
@@ -412,9 +491,13 @@ export const adminUsers = () =>
   call<(User & { suspended_at: string | null; created_at: string; boxes: number })[]>("GET", "/admin/users")
 export const adminSuspend = (id: number, suspended: boolean) =>
   call<{ ok: boolean; sessions?: number; boxes?: number }>("PATCH", `/admin/users/${id}`, { suspended })
+export const adminSetRole = (id: number, role: Role) =>
+  call<{ ok: boolean; role: Role; transferred: boolean }>("PATCH", `/admin/users/${id}/role`, { role })
 export const adminSettings = () =>
   call<{
     settings: Record<string, string>
+    /** False for an admin: settings are the owner's to change. */
+    can_edit: boolean
     provider: { digitalocean: string | null }
     /** Whether this instance encrypts its own credentials at rest. */
     secrets_sealed: boolean
@@ -439,19 +522,6 @@ export const adminCreateInvite = (note: string) =>
 export const adminRevokeInvite = (id: number) => call("DELETE", `/admin/invites/${id}`)
 
 export const adminWaitlist = () => call<{ id: number; email: string; created_at: string }[]>("GET", "/admin/waitlist")
-
-export const adminBilling = () =>
-  call<{
-    configured: boolean
-    margin_pct: number
-    currency: string
-    secret_key: string | null
-    webhook_secret: string | null
-    livemode: boolean | null
-    plans: { size: string; label: string; cost_cents: number; price_cents: number }[]
-  }>("GET", "/billing/config")
-export const adminSaveBilling = (values: { margin_pct?: number; secret_key?: string; webhook_secret?: string }) =>
-  call<{ ok: boolean; changed: string[] }>("PUT", "/billing/config", values)
 
 /**
  * The claims list as a file.

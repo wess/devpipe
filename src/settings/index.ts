@@ -34,7 +34,6 @@ export const SETTING = {
    * the control plane is still allowed, and this converges hourly.
    */
   sshSources: "boxes_ssh_sources",
-  billingMarginPct: "billing_margin_pct",
   /** Gigabytes a box may send in an hour before it is worth a look. */
   egressLimitGb: "boxes_egress_limit_gb",
   /**
@@ -45,15 +44,6 @@ export const SETTING = {
    * which is the shape of a proxy rather than a seedbox.
    */
   egressDailyGb: "boxes_egress_daily_gb",
-  /**
-   * Largest size a box may be while nothing is being charged for it.
-   *
-   * An instance with no Stripe key gives boxes away, which is right for a beta
-   * and unbounded by default: every invited person could take the box limit in
-   * the largest size, on the owner's provider account, and nothing in the
-   * product would mention it until the invoice.
-   */
-  freeMaxSize: "boxes_free_max_size",
   /**
    * Provider image new boxes are built from. Empty means the plain base image
    * and a full install on first boot, which is the correct fallback: a missing
@@ -69,20 +59,21 @@ export const SETTING = {
    */
   idleHours: "boxes_idle_hours",
   /**
-   * Idle hours for a box nobody is paying for. Falls back to `idleHours`.
+   * Idle hours for a box belonging to anybody but the owner. Falls back to
+   * `idleHours`.
    *
-   * Separate because the right answer differs. Somebody paying for a box wants
-   * it there when they come back; somebody trying the product out for twenty
-   * minutes costs the owner money for every hour it lingers afterwards.
+   * Separate because the right answer can differ. The person running the
+   * instance usually wants their own machine where they left it; somebody
+   * else's experiment costs them money for every hour it lingers.
    */
   freeIdleHours: "boxes_free_idle_hours",
   /**
-   * Gigabytes of workspace given to a free box that asked for none. 0 disables.
+   * Gigabytes of workspace given to a box that asked for none. 0 disables.
    *
    * Not generosity — reclaim only ever touches boxes carrying a workspace,
-   * because a box without one holds the only copy of what is on it. A free box
-   * with no workspace can therefore never be reclaimed, which is exactly
-   * backwards: the boxes nobody pays for are the ones that most need to sleep.
+   * because a box without one holds the only copy of what is on it. A box with
+   * no workspace can therefore never be reclaimed, which is exactly backwards:
+   * the machines nobody is watching are the ones that most need to sleep.
    */
   freeWorkspaceGb: "boxes_free_workspace_gb",
   /**
@@ -90,6 +81,45 @@ export const SETTING = {
    * 0 disables, which is the default: this throws away somebody's files.
    */
   dormantDays: "boxes_dormant_days",
+  /**
+   * Whether GPU sizes appear in the wizard at all. Off by default.
+   *
+   * The cheapest GPU box is a hundred times the hourly cost of the cheapest
+   * CPU one, so this is not a switch that should default to on because the
+   * code supporting it shipped. Even switched on, a GPU box is an admin's to
+   * create — the bill lands on whoever installed this.
+   */
+  gpuEnabled: "boxes_gpu_enabled",
+  /**
+   * Hours a GPU box may sit unused before it is slept. Minimum one.
+   *
+   * Unlike `idleHours` this cannot be turned off. An idle CPU box is four
+   * dollars a month of somebody's patience; an idle H100 is four dollars an
+   * hour, and the machine that ran a job on Friday and was forgotten is the
+   * normal case rather than the unlucky one.
+   */
+  gpuIdleHours: "boxes_gpu_idle_hours",
+  /**
+   * The most this instance may spend at the provider in a calendar month, in
+   * cents. 0 is no cap, which is the default.
+   *
+   * The provider's own prices, with no margin — this answers "what will
+   * DigitalOcean charge me", which is the question somebody self-hosting is
+   * actually asking. Past it, nothing new starts and what is running is put to
+   * sleep.
+   */
+  spendCapCents: "billing_spend_cap_cents",
+  /** How far into the cap before the instance starts saying so, as a percentage. */
+  spendWarnPct: "billing_spend_warn_pct",
+  /**
+   * Whether the owner has been through the setup wizard.
+   *
+   * Only ever a record that somebody read the last screen. What decides
+   * whether the instance can actually make a box is the preconditions
+   * themselves, checked against the provider — this flag never gates anything
+   * except whether the wizard opens by itself.
+   */
+  setupComplete: "setup_complete",
 } as const
 
 const DEFAULTS: Record<string, string> = {
@@ -107,9 +137,6 @@ const DEFAULTS: Record<string, string> = {
   // above real work and an order of magnitude below a machine that is relaying
   // for somebody.
   [SETTING.egressDailyGb]: "500",
-  // The cheapest size. Deliberately the floor rather than the ceiling: an
-  // instance giving boxes away should have to raise this on purpose.
-  [SETTING.freeMaxSize]: "s-1vcpu-1gb",
   [SETTING.boxImage]: "",
   [SETTING.boxImageTools]: "",
   // Off until somebody turns it on. Reclaiming a box is the right economics and
@@ -125,14 +152,23 @@ const DEFAULTS: Record<string, string> = {
   // Off. Deleting a workspace destroys files somebody may still want, and that
   // is not a thing to start doing because a default said so.
   [SETTING.dormantDays]: "0",
+  // Off. The owner turns GPU on deliberately, having decided what a customer
+  // may spend per hour on their provider account.
+  [SETTING.gpuEnabled]: "0",
+  // An hour. Long enough that a coffee break does not cost a rebuild, short
+  // enough that a forgotten H100 is four dollars rather than seventy.
+  [SETTING.gpuIdleHours]: "1",
+  // Off. A cap that arrived by default would sleep somebody's boxes over a
+  // number they never chose, and the instance this ships from has a business
+  // reason to spend. The setup wizard asks for one, which is where a
+  // self-hoster meets it.
+  [SETTING.spendCapCents]: "0",
+  [SETTING.spendWarnPct]: "80",
+  [SETTING.setupComplete]: "0",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
   [SETTING.cliUrl]: "https://devpipe.com/dist/devpipe",
   [SETTING.sshKeyIds]: "",
   [SETTING.sshSources]: "",
-  // A percentage on top of what the provider charges. 100 means the customer
-  // pays double cost, which is what covers the control plane, support and the
-  // boxes nobody remembered to destroy.
-  [SETTING.billingMarginPct]: "100",
 }
 
 export const getSetting = async (db: Connection, key: string): Promise<string> => {
@@ -167,15 +203,15 @@ export const setSetting = async (db: Connection, key: string, value: string): Pr
  *
  * These were plaintext, and of everything in this database they are the worst
  * things to leave that way. The DigitalOcean token creates and destroys every
- * droplet on the account, detaches volumes, and spends money with no ceiling;
- * the Stripe secret key moves other people's. Agent logins have been sealed
- * since they shipped precisely because they "can spend their money" — the same
- * sentence is true of these, about *your* money, and they were the ones left
- * readable by anyone with a `psql` session or a copy of last night's backup.
+ * droplet on the account, detaches volumes, and spends money with no ceiling.
+ * Agent logins have been sealed since they shipped precisely because they "can
+ * spend their money" — the same sentence is true of this one, about *your*
+ * money, and it was the one left readable by anyone with a `psql` session or a
+ * copy of last night's backup.
  * Backups are rsynced off the database host, so that is more than one place.
  *
  * Bound to the row they belong to. Without the AAD, a sealed value could be
- * moved from `stripe_secret_key` into `digitalocean_token` and the instance
+ * moved from one credential row into `digitalocean_token` and the instance
  * would decrypt it happily and hand it to the provider client — encryption
  * stops a value being *read*, and only binding stops it being *moved*.
  *
@@ -197,11 +233,6 @@ export const credentialsSealed = (): boolean => secretsAvailable()
 
 export const CREDENTIAL = {
   digitalOceanToken: "digitalocean_token",
-  stripeSecretKey: "stripe_secret_key",
-  // Separate from the secret key on purpose: the key can create charges, the
-  // signing secret can only prove an event came from Stripe. Rotating one
-  // should not force rotating the other.
-  stripeWebhookSecret: "stripe_webhook_secret",
 } as const
 
 export const getCredential = async (db: Connection, key: string): Promise<string | null> => {

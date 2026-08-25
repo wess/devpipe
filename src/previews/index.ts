@@ -3,6 +3,7 @@ import { from } from "@atlas/db"
 import type { Conn } from "@atlas/server"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
+import { boxEndpoint, boxSocketEndpoint } from "../providers/endpoint.ts"
 import { consume } from "../security/ratelimit.ts"
 import { getSetting, SETTING } from "../settings/index.ts"
 import { audit } from "../util/audit.ts"
@@ -56,8 +57,7 @@ const COOKIE = "dp_preview"
  * would put a box's control surface on a hostname with no bearer in front of
  * it, which is the opposite of everything else here.
  */
-const isSensiblePort = (port: number) =>
-  Number.isInteger(port) && port > 0 && port < 65536 && port !== 7788
+const isSensiblePort = (port: number) => Number.isInteger(port) && port > 0 && port < 65536 && port !== 7788
 
 export type PreviewRow = {
   id: number
@@ -253,10 +253,13 @@ export const previewHost = (db: Connection, appUrl: string) => {
     const body = (await req.json().catch(() => null)) as { code?: string } | null
     const code = String(body?.code ?? "")
     if (!code || unsign(code) !== grantPayload(preview.id)) {
-      return Response.json({ error: "That did not work. Open the preview again." }, {
-        status: 403,
-        headers: cors,
-      })
+      return Response.json(
+        { error: "That did not work. Open the preview again." },
+        {
+          status: 403,
+          headers: cors,
+        },
+      )
     }
 
     return Response.json(
@@ -314,7 +317,7 @@ export const previewHost = (db: Connection, appUrl: string) => {
     headers.set("x-forwarded-host", (req.headers.get("host") ?? "").split(":")[0] ?? "")
     headers.set("x-forwarded-proto", "https")
 
-    const target = `https://${box.hostname}/v1/proxy/${preview.port}${url.pathname}${url.search}`
+    const target = `${boxEndpoint(box)}/v1/proxy/${preview.port}${url.pathname}${url.search}`
     let res: Response
     try {
       res = await fetch(target, {
@@ -377,9 +380,7 @@ export const previewHost = (db: Connection, appUrl: string) => {
    * same questions as a page request, and answering them twice in two places
    * is how a live-reload socket ends up being the one door with no lock on it.
    */
-  const resolve = async (
-    req: Request,
-  ): Promise<{ preview: PreviewRow } | { refused: Response } | null> => {
+  const resolve = async (req: Request): Promise<{ preview: PreviewRow } | { refused: Response } | null> => {
     const label = labelOf(req.headers.get("host") ?? "", await boxDomain(db))
     if (!label) return null
     const preview = await bySlug(db, label)
@@ -426,7 +427,7 @@ export const previewHost = (db: Connection, appUrl: string) => {
       // The daemon takes its bearer from the query on an upgrade, because a
       // websocket client cannot set a header — and strips it back out before
       // the dev server sees the request.
-      url: `wss://${box.hostname}/v1/proxy/${preview.port}${url.pathname}${query}token=${encodeURIComponent(box.agent_token)}`,
+      url: `${boxSocketEndpoint(box)}/v1/proxy/${preview.port}${url.pathname}${query}token=${encodeURIComponent(box.agent_token)}`,
       protocol: req.headers.get("sec-websocket-protocol"),
     }
   }
@@ -437,9 +438,11 @@ export const previewHost = (db: Connection, appUrl: string) => {
 
     const preview = await bySlug(db, label)
     if (!live(preview)) {
-      const hit = await consume(db, `preview.miss|ip|${addressOf(req)}`, MISS_LIMIT, MISS_WINDOW).catch(
-        () => ({ ok: true, count: 0, retryAfter: 0 }),
-      )
+      const hit = await consume(db, `preview.miss|ip|${addressOf(req)}`, MISS_LIMIT, MISS_WINDOW).catch(() => ({
+        ok: true,
+        count: 0,
+        retryAfter: 0,
+      }))
       if (!hit.ok) {
         return new Response("Too many requests\n", {
           status: 429,
@@ -580,10 +583,7 @@ export const previewRoutes = (db: Connection) => {
         const hours = Number(b.hours)
         const expires =
           audience === "link"
-            ? new Date(
-                Date.now() +
-                  (Number.isFinite(hours) && hours > 0 ? Math.min(hours, 168) : 24) * 3600_000,
-              )
+            ? new Date(Date.now() + (Number.isFinite(hours) && hours > 0 ? Math.min(hours, 168) : 24) * 3600_000)
             : null
         const label = String(b.label ?? "").slice(0, 80)
         const domain = await boxDomain(db)

@@ -403,8 +403,8 @@ caption {
               <td>A rate-limit counter keyed on the IP address the request came from, and — on sign-in and password reset — on a hash of the email address in the request body. It holds a count and the start of the window, never the request itself. This is written whether or not the address belongs to an account.</td>
             </tr>
             <tr>
-              <td>Billing<br><span class="ph">once billing ships</span></td>
-              <td>A Stripe customer id, the state of your subscription and which box it covers, and the id of every Stripe event we have already processed so a redelivery is not applied twice. Card numbers go to Stripe directly and never reach our servers.</td>
+              <td>Every hour a machine of yours exists</td>
+              <td>A row saying what that box or workspace cost at the provider's own prices, the span it covers, and which of your machines it was. Nobody is charged for any of it — this is what makes the instance's spending visible and what a spending cap is measured against. There is no payment processor in this service and no card details anywhere in it.</td>
             </tr>
           </tbody>
         </table>
@@ -478,11 +478,6 @@ caption {
           hold the machine, its disk and its network traffic, and they see the
           addresses that connect to it. The region you pick decides which country
           it sits in. Their terms and privacy policy govern that layer.
-        </li>
-        <li>
-          <strong>Stripe</strong> handles payment. They collect your card and
-          billing details directly; we receive a customer id and the state of your
-          subscription.
         </li>
         <li>
           <strong>Let's Encrypt</strong> issues the certificate for your box's
@@ -567,6 +562,7 @@ caption {
     <span>Devpipe · draft documents</span>
     <nav class="foot-nav" aria-label="Site">
       <a href="/">Home</a>
+      <a href="/self-host.html">Self-host</a>
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>
       <a href="/aup.html">Acceptable use</a>

@@ -327,8 +327,8 @@ footer {
     <ol class="toc">
       <li><a href="#what">01 · What Devpipe is</a></li>
       <li><a href="#account">02 · Your account</a></li>
-      <li><a href="#billing">03 · Billing</a></li>
-      <li><a href="#cancel">04 · Cancelling</a></li>
+      <li><a href="#cost">03 · What it costs</a></li>
+      <li><a href="#cancel">04 · Stopping</a></li>
       <li><a href="#yours">05 · What you run</a></li>
       <li><a href="#access">06 · Our access to your box</a></li>
       <li><a href="#availability">07 · Availability</a></li>
@@ -351,23 +351,20 @@ footer {
         iPad.
       </p>
       <p>
-        A box is rented compute. You are not buying hardware, and you are not
-        buying a licence to software we wrote. You are paying for a machine to
-        exist and to keep running while you are not watching it.
       </p>
       <p>
         Devpipe does not supply the coding agents. Claude Code, Codex CLI and
         Gemini CLI are installed on your box because you asked for them, and you
         sign into them with your own account. Your agreement with those vendors is
-        yours. If your subscription lapses the box keeps running and the agent
-        stops working, and that is not a fault of the service.
+        yours. If your arrangement with them lapses the box keeps running and
+        the agent stops working, and that is not a fault of the service.
       </p>
     </section>
 
     <section id="account">
       <h2><span class="n">02</span> Your account</h2>
       <ul>
-        <li>Give a working email address. It is how we reach you about billing, suspension and anything urgent.</li>
+        <li>Give a working email address. It is how we reach you about suspension and anything urgent.</li>
         <li>Passwords are at least 12 characters. Keep yours to yourself; sessions are per device and you can end any of them.</li>
         <li>A sign-in lasts 30 days unless you sign out or change your password, which ends every other session.</li>
         <li>You are responsible for everything done under your account, including everything an agent does after you start it.</li>
@@ -375,49 +372,44 @@ footer {
       </ul>
     </section>
 
-    <section id="billing">
-      <h2><span class="n">03</span> Billing</h2>
+    <section id="cost">
+      <h2><span class="n">03</span> What it costs</h2>
       <p>
-        <strong>You pay for the machine, not for the time you spend connected
-        to it.</strong> That is the whole product: the machine carries on while
-        you are away. Disconnecting costs the same as staying connected. There
-        is no pause — a powered-off machine still holds its disk and its
-        address, and the provider still charges us for it.
+        <strong>Nothing is sold here and nothing is charged.</strong> Devpipe
+        creates machines on a DigitalOcean account and DigitalOcean invoices
+        whoever owns that account. There is no payment processor in this
+        service, no card on file, and no subscription.
       </p>
       <ul>
-        <li>Prices are per box, per month, in US dollars, and are shown before you confirm a subscription.</li>
-        <li>You subscribe to a size and then create a box on that subscription. Billing starts when you subscribe, not when the box finishes building, and it continues until you cancel — see <a href="#cancel">cancelling</a>.</li>
-        <li>One subscription covers one box at a time. A second box needs a second subscription.</li>
-        <li>Billing cycle: <span class="ph">monthly in advance, or hourly metered with a monthly cap — decide, then state it plainly here</span>.</li>
-        <li>Payment is taken by Stripe. Card details go to Stripe, not to us.</li>
-        <li>Taxes: <span class="ph">VAT / sales tax handling, and whether listed prices include it</span>.</li>
-        <li>If a payment fails we will email you and give you <span class="ph">grace period</span> to fix it. After that the box is suspended, and after a further <span class="ph">period</span> it is destroyed along with its disk.</li>
+        <li>On an instance you run yourself, that account is yours: you pay DigitalOcean directly, at their prices, exactly as if you had created the machines in their console.</li>
+        <li>On an instance somebody else runs, the machines are on <em>their</em> account and their arrangement with you is theirs to state — this document does not create one.</li>
+        <li>The software meters what every box and every volume costs at the provider's own prices, shows it to the person who created them, and shows the instance total to whoever runs it.</li>
+        <li>An instance can be given a monthly ceiling. Past it nothing new starts and running machines are put to sleep with their files intact.</li>
       </ul>
+      <p>
+        A box is rented compute either way. You are not buying hardware, and you
+        are not buying a licence to the software — that is
+        <a href="https://github.com/wess/devpipe">Apache-2.0</a>, and you may run
+        it yourself.
+      </p>
     </section>
 
     <section id="cancel">
-      <h2><span class="n">04</span> Cancelling</h2>
+      <h2><span class="n">04</span> Stopping</h2>
       <p>
-        <strong>Destroying a box is not cancelling.</strong> They are two
-        actions and you need both: destroy the box to stop using the machine,
-        cancel the subscription to stop being charged. Doing only the first
-        leaves the subscription running.
+        <strong>There is nothing to cancel.</strong> A box stops costing money
+        the moment it is asleep or destroyed, because the only thing being paid
+        for is a machine at the provider.
       </p>
+      <ul>
+        <li><b>Sleeping</b> releases the droplet and keeps the workspace. The files come back when the box wakes. This is what the idle sweep and the spending cap do, and it is why a box carrying no workspace is never touched by either.</li>
+        <li><b>Destroying</b> a box destroys its disk. Anything not on a workspace is gone, and neither we nor the provider can get it back — copy what you want to keep first.</li>
+        <li><b>A workspace</b> keeps costing while it exists, whether or not a box is attached. That is the point of it. Delete it when the work is done.</li>
+      </ul>
       <p>
-        A subscription covers one box at a time. Destroying a box releases its
-        subscription, which then covers the next box you create at that size
-        rather than lapsing — useful if that is what you meant, and an ongoing
-        charge if it is not. Cancel it in the billing portal, reachable from
-        your account. Cancellation takes effect
-        <span class="ph">at the end of the paid period, or immediately with a pro-rata refund — decide</span>.
+        To close an account entirely, see <a href="/privacy.html#deletion">deletion</a>
+        in the privacy policy.
       </p>
-      <p>
-        Destroying a box destroys its disk. Copy anything you want to keep first;
-        we cannot get it back afterwards and neither can the provider. To close
-        your account entirely, see <a href="/privacy.html#deletion">deletion</a> in
-        the privacy policy.
-      </p>
-      <p>Refunds for part of a period: <span class="ph">decide — pro rata, or none</span>.</p>
     </section>
 
     <section id="yours">
@@ -550,6 +542,7 @@ footer {
     <span>Devpipe · draft documents</span>
     <nav class="foot-nav" aria-label="Site">
       <a href="/">Home</a>
+      <a href="/self-host.html">Self-host</a>
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>
       <a href="/aup.html">Acceptable use</a>

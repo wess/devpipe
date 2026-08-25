@@ -130,8 +130,8 @@ export const ShareTerminal: React.FC<{
               </div>
               {mode === "control" && (
                 <p className="note warn">
-                  This is a shell on your box. Whoever opens it can run anything you can, including reading whatever
-                  the box can read.
+                  This is a shell on your box. Whoever opens it can run anything you can, including reading whatever the
+                  box can read.
                 </p>
               )}
               <label className="field">

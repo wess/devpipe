@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { planFor } from "../src/billing/plans.ts"
 import { CATALOG, fits, memoryFor, SIZES } from "../src/boxes/catalog.ts"
 import { ADMIN_TABS, HOME_PATH, href as routeHref, WORKSPACE_PATH } from "../src/web/routes.ts"
 import { db, truncateAll } from "./setup.ts"
 
 /**
- * The static pages under `site/` are a hand-written copy of numbers that live
- * in the catalog. Nothing links the two, so the way they go wrong is quietly:
- * somebody changes a droplet size or a tool's footprint and the published
- * price stops matching what the card is charged. These tests are the link.
+ * The static pages under `site/` are a hand-written copy of things that live in
+ * the code. Nothing links the two, so the way they go wrong is quietly:
+ * somebody renames a view and the lander's link becomes a page that loads the
+ * workspace when it meant to load something else. These tests are the link.
  */
 
 /**
@@ -23,8 +22,16 @@ const LEGAL = ["terms.html", "privacy.html", "aup.html"]
  */
 const ASYLUM = ["asylum.html", "asylum-docs.html", "asylum-class.html"]
 
+/**
+ * How to run one yourself. Product documentation like Asylum's, and the page
+ * every other one now points at — a licence that invites people to self-host
+ * with no page saying what that takes is an invitation to open an issue
+ * instead.
+ */
+const SELF_HOST = ["self-host.html"]
+
 /** Every page the link checker knows about. */
-const PAGES = ["index.html", ...LEGAL, ...ASYLUM]
+const PAGES = ["index.html", ...LEGAL, ...ASYLUM, ...SELF_HOST]
 
 /**
  * Paths the web tier answers with the app shell rather than with a file in
@@ -35,7 +42,7 @@ const PAGES = ["index.html", ...LEGAL, ...ASYLUM]
 const APP_PATHS = new Set<string>([
   HOME_PATH,
   WORKSPACE_PATH,
-  routeHref({ view: "billing", tab: "overview" }),
+  routeHref({ view: "spend", tab: "overview" }),
   routeHref({ view: "settings", tab: "overview" }),
   ...ADMIN_TABS.map(tab => routeHref({ view: "admin", tab })),
 ])

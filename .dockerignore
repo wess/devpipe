@@ -1,0 +1,6 @@
+*
+!daemon/
+!daemon/Cargo.toml
+!daemon/Cargo.lock
+!daemon/src/
+!daemon/src/**

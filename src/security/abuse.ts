@@ -72,7 +72,7 @@ export const suspendUser = async (
 ): Promise<Suspension> => {
   const user = (await db.one(from("users").where(q => q("id").equals(userId)))) as any
   if (!user) return { ok: false, sessions: 0, boxes: 0, error: "No such user." }
-  if (user.is_owner) {
+  if (user.role === "owner") {
     return { ok: false, sessions: 0, boxes: 0, error: "The instance owner cannot be suspended." }
   }
 

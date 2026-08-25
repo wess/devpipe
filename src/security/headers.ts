@@ -11,9 +11,10 @@
  * `connect-src` has to allow the wildcard the boxes live under. Everything else
  * stays same-origin.
  *
- * A map rather than a pipe: not every route is built from a pipeline — the
- * Stripe webhook is a bare handler, because a signature is its authentication —
- * so the only place that covers all of them is the response on the way out.
+ * A map rather than a pipe: not every route is built from a pipeline — a box
+ * calling back during setup is a bare handler, because its token is its
+ * authentication — so the only place that covers all of them is the response
+ * on the way out.
  */
 export const securityHeaders = (boxDomain: string): Record<string, string> => ({
   "content-security-policy": [

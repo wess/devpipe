@@ -46,10 +46,7 @@ export const Vault: React.FC = () => {
 
   const refresh = useCallback(
     () =>
-      Promise.all([
-        api.listVault().then(setEntries),
-        api.listVaultGrants().then(setGrants),
-      ])
+      Promise.all([api.listVault().then(setEntries), api.listVaultGrants().then(setGrants)])
         .catch(() => {})
         .finally(() => setLoading(false)),
     [],
@@ -177,8 +174,8 @@ export const Vault: React.FC = () => {
     <div className="page">
       <h1>Vault</h1>
       <p className="muted">
-        Configuration and credentials your boxes can use. Everything here is available to the agents
-        running on them, which is why the two kinds are not the same thing.
+        Configuration and credentials your boxes can use. Everything here is available to the agents running on them,
+        which is why the two kinds are not the same thing.
       </p>
       {note && <p className={`note ${note.kind === "bad" ? "bad" : "ok"}`}>{note.text}</p>}
 
@@ -212,8 +209,7 @@ export const Vault: React.FC = () => {
               ))}
             </select>
             <small className="muted">
-              A box reads the narrowest scope that defines a name: its own first, then its
-              workspace's, then everywhere.
+              A box reads the narrowest scope that defines a name: its own first, then its workspace's, then everywhere.
             </small>
           </label>
 
@@ -326,9 +322,7 @@ export const Vault: React.FC = () => {
                           )}
                         </td>
                         <td className="muted small">{scopeLabel(entry.scope, entry.scope_id)}</td>
-                        <td className="muted small">
-                          {entry.last_used_at ? when(entry.last_used_at) : "never"}
-                        </td>
+                        <td className="muted small">{entry.last_used_at ? when(entry.last_used_at) : "never"}</td>
                         <td className="right">
                           {entry.kind === "secret" && (
                             <button
@@ -370,8 +364,8 @@ export const Vault: React.FC = () => {
       <section className="card">
         <h2>Using it from a box</h2>
         <p className="muted small">
-          Every box carries a <code>devpipe</code> command and an MCP server, so an agent reaches
-          what you keep here without you pasting anything into a prompt.
+          Every box carries a <code>devpipe</code> command and an MCP server, so an agent reaches what you keep here
+          without you pasting anything into a prompt.
         </p>
         <pre>
           <code>{`devpipe value list          # names and kinds this box may use

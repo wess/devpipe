@@ -6,7 +6,7 @@ import { adminRoutes } from "../src/admin/index.ts"
 import { authRoutes } from "../src/auth/index.ts"
 import { sessionRoutes } from "../src/auth/sessions.ts"
 import { boxRoutes } from "../src/boxes/index.ts"
-import { CREDENTIAL, setCredential } from "../src/settings/index.ts"
+import { CREDENTIAL, SETTING, setCredential, setSetting } from "../src/settings/index.ts"
 import { userRoutes } from "../src/users/index.ts"
 import { waitlistRoutes } from "../src/waitlist/index.ts"
 import { db, truncateAll } from "./setup.ts"
@@ -453,7 +453,10 @@ describe("the routes are actually guarded", () => {
     expect(data.error).toContain("Throwaway")
   })
 
-  test("once Stripe is configured, creating a box needs a subscription", async () => {
+  // What used to be a subscription gate. Nobody is charged for a box any more
+  // — the bill lands on whoever installed the instance — so the only thing
+  // that refuses one on money grounds is the ceiling they set.
+  test("the instance's spending cap refuses a box before a droplet exists", async () => {
     const reg = await call("POST", "/auth/register", {
       email: "payer@example.com",
       username: "payer",
@@ -461,41 +464,28 @@ describe("the routes are actually guarded", () => {
     })
     expect(reg.status).toBe(201)
 
-    // Both are checked before anything is provisioned; the provider token has
-    // to be present or the create refuses for that reason first.
+    // The provider token has to be present or the create refuses for that
+    // reason first.
     await setCredential(db, CREDENTIAL.digitalOceanToken, "dop_v1_not-a-real-token")
-    await setCredential(db, CREDENTIAL.stripeSecretKey, "sk_test_not-a-real-key")
+    await setSetting(db, SETTING.spendCapCents, "1000")
+    await db.execute({
+      text: `INSERT INTO spend_ledger (cents, kind, note) VALUES (2000, 'box', 'last month was expensive')`,
+      values: [],
+    } as any)
 
     const { status, data } = await call(
       "POST",
       "/boxes",
-      { name: "unpaid", size: "s-1vcpu-1gb", tools: ["git"] },
+      { name: "over-cap", size: "s-1vcpu-1gb", tools: ["git"] },
       reg.data.token,
     )
-    // 402, not 403: the client needs to tell a missing payment apart from a
-    // missing permission to know whether to offer a checkout link.
-    expect(status).toBe(402)
-    expect(data.error).toContain("Subscribe")
+    // 409, not 402: nothing is for sale, so this is a conflict with a limit
+    // rather than a missing payment.
+    expect(status).toBe(409)
+    expect(data.error).toContain("cap")
     // Nothing was written, so nothing is left holding a name or a droplet.
-    expect((await db.all(from("boxes").where(q => q("name").equals("unpaid")))).length).toBe(0)
-  })
+    expect((await db.all(from("boxes").where(q => q("name").equals("over-cap")))).length).toBe(0)
 
-  test("an active subscription for another size is refused with the size named", async () => {
-    const me = (await db.one(from("users").where(q => q("email").equals("payer@example.com")))) as any
-    await db.execute(
-      from("subscriptions").insert({
-        user_id: me.id,
-        stripe_customer_id: "cus_integration",
-        stripe_subscription_id: "sub_integration",
-        status: "active",
-        size: "s-2vcpu-4gb",
-      }),
-    )
-
-    const token = (await call("POST", "/auth/login", { email: "payer@example.com", password: "a-very-long-password" }))
-      .data.token
-    const { status, data } = await call("POST", "/boxes", { name: "wrong size", size: "s-1vcpu-1gb" }, token)
-    expect(status).toBe(402)
-    expect(data.error).toContain("4 GB")
+    await setSetting(db, SETTING.spendCapCents, "0")
   })
 })

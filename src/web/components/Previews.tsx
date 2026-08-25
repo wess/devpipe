@@ -109,16 +109,10 @@ export const Previews: React.FC<{ boxId: number; ready: boolean }> = ({ boxId, r
       {previews.map(p => (
         <div key={p.id} className="row">
           <a className="row-main" href={p.url} target="_blank" rel="noreferrer">
-            {p.audience === "link" ? (
-              <Link2 size={12} className="pending" />
-            ) : (
-              <Lock size={12} className="ok" />
-            )}
+            {p.audience === "link" ? <Link2 size={12} className="pending" /> : <Lock size={12} className="ok" />}
             <span className="row-body">
               <strong>:{p.port}</strong>
-              <span className="muted small">
-                {p.audience === "link" ? "anyone with the link" : "only you"}
-              </span>
+              <span className="muted small">{p.audience === "link" ? "anyone with the link" : "only you"}</span>
             </span>
             <ExternalLink size={12} className="dim" />
           </a>

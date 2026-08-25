@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto"
+import { createHmac, timingSafeEqual } from "node:crypto"
 
 /**
  * Narrow, short-lived tokens for the one credential a browser has to hold.
@@ -47,3 +47,21 @@ export const attachOne = (boxToken: string, sessionId: string, ttlSeconds = ATTA
   signForBox(boxToken, `${ATTACH}:${sessionId}`, ttlSeconds)
 
 export const attachAny = (boxToken: string, ttlSeconds = ATTACH_TTL): string => signForBox(boxToken, ATTACH, ttlSeconds)
+
+/** The control-plane relay's half of the daemon's scoped-token verifier. */
+export const verifyForBox = (boxToken: string, token: string): string | null => {
+  const [scope, expiryText, signature, ...extra] = token.split(".")
+  if (!scope || !expiryText || !signature || extra.length > 0) return null
+  const expiry = Number(expiryText)
+  if (!Number.isFinite(expiry) || expiry < Math.floor(Date.now() / 1000)) return null
+  const body = `${scope}.${expiryText}`
+  const expected = createHmac("sha256", boxToken).update(body).digest()
+  let presented: Buffer
+  try {
+    presented = Buffer.from(signature, "base64url")
+  } catch {
+    return null
+  }
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return null
+  return scope
+}

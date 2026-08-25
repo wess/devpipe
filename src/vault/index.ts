@@ -79,12 +79,7 @@ const publicEntry = (row: any) => ({
  * Without this, `scope_id` is an unchecked integer from the request and writing
  * into someone else's workspace is a matter of guessing a number.
  */
-export const ownsScope = async (
-  db: Connection,
-  userId: number,
-  scope: Scope,
-  scopeId: number,
-): Promise<boolean> => {
+export const ownsScope = async (db: Connection, userId: number, scope: Scope, scopeId: number): Promise<boolean> => {
   if (scope === "global") return scopeId === 0
   if (!Number.isInteger(scopeId) || scopeId <= 0) return false
   const table = scope === "workspace" ? "workspaces" : "boxes"
@@ -124,19 +119,11 @@ export const putEntry = async (
     )
     return
   }
-  await db.execute(
-    from("vault_entries").insert({ user_id: userId, scope, scope_id: scopeId, name, kind, sealed }),
-  )
+  await db.execute(from("vault_entries").insert({ user_id: userId, scope, scope_id: scopeId, name, kind, sealed }))
 }
 
 /** The stored row for one exact scope, or null. */
-const entryAt = async (
-  db: Connection,
-  userId: number,
-  scope: Scope,
-  scopeId: number,
-  name: string,
-): Promise<any> =>
+const entryAt = async (db: Connection, userId: number, scope: Scope, scopeId: number, name: string): Promise<any> =>
   (await db.one(
     from("vault_entries")
       .where(q => q("user_id").equals(userId))
@@ -205,9 +192,7 @@ export const visibleTo = async (
   boxId: number,
   workspaceId: number | null,
 ): Promise<Array<{ name: string; kind: Kind; scope: Scope }>> => {
-  const rows = (await db.all(
-    from("vault_entries").where(q => q("user_id").equals(userId)),
-  )) as any[]
+  const rows = (await db.all(from("vault_entries").where(q => q("user_id").equals(userId)))) as any[]
   const seen = new Map<string, { name: string; kind: Kind; scope: Scope }>()
   for (const scope of [...PRECEDENCE].reverse()) {
     for (const row of rows) {
@@ -251,8 +236,7 @@ export const vaultRoutes = (db: Connection) => {
     }),
   )
 
-  const scopeFrom = (raw: unknown): Scope | null =>
-    SCOPES.includes(raw as Scope) ? (raw as Scope) : null
+  const scopeFrom = (raw: unknown): Scope | null => (SCOPES.includes(raw as Scope) ? (raw as Scope) : null)
 
   return [
     // Names and kinds across every scope. Deliberately never values: a listing
@@ -357,9 +341,7 @@ export const vaultRoutes = (db: Connection) => {
       "/vault/grants",
       authed(async c => {
         const me = currentUser(c)
-        const rows = (await db.all(
-          from("vault_grants").where(q => q("user_id").equals(me.id)),
-        )) as any[]
+        const rows = (await db.all(from("vault_grants").where(q => q("user_id").equals(me.id)))) as any[]
         const out = []
         for (const row of rows) {
           const entry = (await db.one(from("vault_entries").where(q => q("id").equals(row.entry_id)))) as any
@@ -411,9 +393,7 @@ export const vaultRoutes = (db: Connection) => {
             .where(q => q("entry_id").equals(entry.id)),
         )) as any
         if (!existing) {
-          await db.execute(
-            from("vault_grants").insert({ user_id: me.id, box_id: boxId, entry_id: entry.id }),
-          )
+          await db.execute(from("vault_grants").insert({ user_id: me.id, box_id: boxId, entry_id: entry.id }))
         }
         await audit(db, me.id, "vault.grant", `${name} @ ${scope}:${scopeId} to box ${boxId}`)
         return json(c, 200, { ok: true })

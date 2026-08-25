@@ -220,14 +220,14 @@ describe("a sleeping box does not hold its own workspace against itself", () => 
     expect(await holderOf(db, ws, id)).toBeNull()
   })
 
-  test("another box still is", async () => {
+  test("the database refuses a second live holder", async () => {
     const ws = await workspace()
-    const mine = await boxRow({ workspace_id: ws })
-    const theirs = await boxRow({ workspace_id: ws, hostname: "other.devpipe.com", name: "other" })
-    // Excluding myself must not excuse a genuine second holder — that is the
-    // case block storage will not survive.
-    const holder = await holderOf(db, ws, mine)
-    expect(holder?.id).toBe(theirs)
+    await boxRow({ workspace_id: ws })
+    // The preflight query gives a useful message. The index is the actual lock
+    // when two requests arrive before either can see the other's row.
+    await expect(boxRow({ workspace_id: ws, hostname: "other.devpipe.com", name: "other" })).rejects.toThrow(
+      "boxes_live_workspace",
+    )
   })
 
   test("waking past the check reaches the provider, rather than a 409", async () => {

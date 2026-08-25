@@ -3,9 +3,11 @@ import { from } from "@atlas/db"
 import { del, get, json, parseJson, pipeline, post } from "@atlas/server"
 import { currentUser, requireAuth } from "../auth/guard.ts"
 import { REGIONS } from "../boxes/catalog.ts"
-import * as ocean from "../boxes/digitalocean.ts"
+import { beginOperation, operationFailed, operationStep, operationSucceeded } from "../machine/operations.ts"
+import { ProviderUnavailable, requireProvider } from "../providers/index.ts"
+import type { MachineProvider, ProviderKind, Workspace } from "../providers/types.ts"
 import { rateLimit, signedInUser } from "../security/ratelimit.ts"
-import { CREDENTIAL, getCredential } from "../settings/index.ts"
+import { startWorkspaceMetering, stopWorkspaceMetering } from "../spend/meter.ts"
 import { audit } from "../util/audit.ts"
 
 /**
@@ -39,6 +41,7 @@ const publicWorkspace = (row: any, attachedTo?: number | null) => ({
   region: row.region,
   size_gb: row.size_gb,
   created_at: row.created_at,
+  provider: row.provider,
   /** The box currently holding it, if any. Null means free to attach. */
   attached_to: attachedTo ?? null,
 })
@@ -52,11 +55,7 @@ const publicWorkspace = (row: any, attachedTo?: number | null) => ({
  * every slept box unwakeable, so reclaim would have stranded whatever it
  * touched.
  */
-export const holderOf = async (
-  db: Connection,
-  workspaceId: number,
-  exceptBoxId?: number,
-): Promise<any | null> => {
+export const holderOf = async (db: Connection, workspaceId: number, exceptBoxId?: number): Promise<any | null> => {
   const rows = (await db.all(
     from("boxes")
       .where(q => q("workspace_id").equals(workspaceId))
@@ -84,6 +83,7 @@ export const claimForBox = async (
   workspaceId: number,
   region: string,
   exceptBoxId?: number,
+  providerKind?: ProviderKind,
 ): Promise<{ ok: true; workspace: any } | { ok: false; reason: string }> => {
   const workspace = (await db.one(
     from("workspaces")
@@ -92,6 +92,12 @@ export const claimForBox = async (
       .where(q => q("deleted_at").isNull()),
   )) as any
   if (!workspace) return { ok: false, reason: "No such workspace." }
+  if (providerKind && workspace.provider !== providerKind) {
+    return {
+      ok: false,
+      reason: `That workspace belongs to ${workspace.provider}; it cannot be attached to a ${providerKind} machine.`,
+    }
+  }
 
   const holder = await holderOf(db, workspaceId, exceptBoxId)
   if (holder) {
@@ -151,11 +157,20 @@ export const workspaceRoutes = (db: Connection) => {
       create(async c => {
         const me = currentUser(c)
         const b = c.body as { name?: string; region?: string; size_gb?: number }
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-        if (!token) return json(c, 503, { error: "No provider is configured yet." })
+        let provider: MachineProvider
+        try {
+          provider = await requireProvider(db)
+        } catch (err) {
+          if (!(err instanceof ProviderUnavailable)) throw err
+          return json(c, 503, { error: err.message })
+        }
+        if (!provider.workspaces) return json(c, 422, { error: `${provider.label} does not support workspaces.` })
 
         const name = (b.name ?? "").trim().slice(0, 40) || "workspace"
-        const region = REGIONS.find(r => r.slug === b.region)?.slug
+        const providerCatalog = provider.catalog ? await provider.catalog(db) : null
+        const region = providerCatalog
+          ? providerCatalog.regions.find(r => r.slug === b.region)?.slug
+          : REGIONS.find(r => r.slug === b.region)?.slug
         if (!region) return json(c, 422, { error: "Pick a region for this workspace." })
         const sizeGb = Math.min(Math.max(Math.round(Number(b.size_gb) || 10), MIN_GB), MAX_GB)
 
@@ -171,27 +186,47 @@ export const workspaceRoutes = (db: Connection) => {
         // unique across a DigitalOcean account, and two customers both calling
         // one "main" is the ordinary case, not the exception.
         const volumeName = `dp-${me.id}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 60)
-        let volume: ocean.Volume
+        let volume: Workspace
+        const operation = await beginOperation(db, {
+          idempotencyKey: `workspace.create:${me.id}:${provider.kind}:${volumeName}`,
+          provider: provider.kind,
+          kind: "workspace.create",
+        })
         try {
-          volume = await ocean.createVolume(token, { name: volumeName, region, sizeGb })
+          await operationStep(db, operation, "creating-workspace")
+          volume = await provider.workspaces.create(db, { name: volumeName, region, sizeGb })
+          await operationStep(db, operation, "workspace-created", volume.id)
         } catch (err: any) {
+          await operationFailed(db, operation.id, err)
           return json(c, 502, { error: String(err?.message ?? "Could not create that workspace.") })
         }
 
-        const rows = (await db.execute(
-          from("workspaces")
-            // The name as well as the id: a box mounts by name, and the
-            // provider's is authoritative rather than the one we asked for.
-            .insert({
-              user_id: me.id,
-              name,
-              region,
-              size_gb: sizeGb,
-              volume_id: volume.id,
-              volume_name: volume.name || volumeName,
-            })
-            .returning("id", "name", "region", "size_gb", "created_at"),
-        )) as any[]
+        let rows: any[]
+        try {
+          rows = (await db.execute(
+            from("workspaces")
+              .insert({
+                user_id: me.id,
+                name,
+                region,
+                size_gb: sizeGb,
+                provider: provider.kind,
+                volume_id: volume.id,
+                volume_name: volume.name || volumeName,
+              })
+              .returning("id", "name", "region", "size_gb", "provider", "created_at"),
+          )) as any[]
+        } catch (err) {
+          await provider.workspaces.destroy(db, volume.id).catch(cleanupError => {
+            console.error("[devpipe] could not clean up a workspace after its row failed:", cleanupError)
+          })
+          await operationFailed(db, operation.id, err)
+          throw err
+        }
+        await operationSucceeded(db, operation.id)
+        // The provider starts charging for a volume the moment it exists,
+        // whether or not a box is ever attached to it. So does the meter.
+        await startWorkspaceMetering(db, rows[0].id, provider.kind === "digitalocean" ? undefined : 0)
         await audit(db, me.id, "workspace.created", `${name} ${sizeGb}GB ${region}`)
         return json(c, 201, publicWorkspace(rows[0], null))
       }),
@@ -218,22 +253,38 @@ export const workspaceRoutes = (db: Connection) => {
           })
         }
 
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
-        if (token) {
-          try {
-            await ocean.destroyVolume(token, row.volume_id)
-          } catch (err) {
-            // The row stays. A volume the provider still has and we have
-            // forgotten is a charge nobody can explain.
-            console.error("[devpipe] could not delete a workspace volume:", err)
-            return json(c, 502, { error: "The provider would not delete that workspace. Nothing was changed." })
-          }
+        let provider: MachineProvider
+        try {
+          provider = await requireProvider(db, row.provider)
+        } catch (err) {
+          if (!(err instanceof ProviderUnavailable)) throw err
+          return json(c, 503, { error: `${err.message} The workspace has not been changed.` })
         }
+        if (!provider.workspaces) return json(c, 422, { error: `${provider.label} does not support workspaces.` })
+        const operation = await beginOperation(db, {
+          idempotencyKey: `workspace.destroy:${row.id}:${row.volume_id}`,
+          provider: provider.kind,
+          kind: "workspace.destroy",
+          workspaceId: row.id,
+        })
+        try {
+          await operationStep(db, operation, "destroying-workspace", String(row.volume_id))
+          await provider.workspaces.destroy(db, String(row.volume_id))
+        } catch (err) {
+          await operationFailed(db, operation.id, err)
+          console.error("[devpipe] could not delete a workspace volume:", err)
+          return json(c, 502, { error: "The provider would not delete that workspace. Nothing was changed." })
+        }
+        // The last partial hour, before the row stops being one the meter can
+        // read. After the provider has actually deleted it, so a refusal above
+        // has not stopped the clock on storage that still exists.
+        await stopWorkspaceMetering(db, row.id)
         await db.execute(
           from("workspaces")
             .where(q => q("id").equals(row.id))
             .update({ deleted_at: new Date() }),
         )
+        await operationSucceeded(db, operation.id)
         await audit(db, me.id, "workspace.deleted", `${row.name} ${row.size_gb}GB`)
         return json(c, 200, { ok: true })
       }),
