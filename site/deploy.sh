@@ -47,30 +47,30 @@ EOF
 echo "==> vt.wasm"
 (cd "$ROOT/core" && cargo build --release --target wasm32-unknown-unknown >/dev/null)
 
-echo "==> devpiped + devpipe (what a box downloads) and dpctl (what a laptop does)"
+echo "==> devpiped + devpipe-vault (what a box downloads) and devpipe (what a laptop does)"
 docker run --rm --platform linux/amd64 \
   -v "$DEV":/work -w "/work/$NAME/daemon" \
   -e CARGO_TARGET_DIR="/work/$NAME/target-linux" \
-  rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe --bin dpctl" >/dev/null
+  rust:bookworm bash -c "cargo build --release --bin devpiped --bin devpipe-vault --bin devpipe" >/dev/null
 
-echo "==> dpctl for macOS (universal) — what a laptop downloads"
+echo "==> devpipe for macOS (universal) — what a laptop downloads"
 # Built here rather than in the linux container: a Mac binary needs the Mac
 # SDK, and this is the one platform the machine doing the deploy always has.
 # Both architectures in one file, so `install.sh` has a single asset to pick
 # and an Intel Mac is not a separate instruction to follow.
 if [ "$(uname -s)" = "Darwin" ]; then
   for t in aarch64-apple-darwin x86_64-apple-darwin; do
-    (cd "$ROOT/daemon" && cargo build --release --target "$t" --bin dpctl) >/dev/null
+    (cd "$ROOT/daemon" && cargo build --release --target "$t" --bin devpipe) >/dev/null
   done
   mkdir -p "$ROOT/build/dist"
-  lipo -create -output "$ROOT/build/dist/dpctl-macos" \
-    "$ROOT/daemon/target/aarch64-apple-darwin/release/dpctl" \
-    "$ROOT/daemon/target/x86_64-apple-darwin/release/dpctl"
+  lipo -create -output "$ROOT/build/dist/devpipe-macos" \
+    "$ROOT/daemon/target/aarch64-apple-darwin/release/devpipe" \
+    "$ROOT/daemon/target/x86_64-apple-darwin/release/devpipe"
   # Ad-hoc signed so Gatekeeper does not refuse a downloaded binary outright.
   # Not notarised, which is a real gap and a separate piece of work.
-  codesign --force --sign - --timestamp=none "$ROOT/build/dist/dpctl-macos"
+  codesign --force --sign - --timestamp=none "$ROOT/build/dist/devpipe-macos"
 else
-  echo "    (not on macOS — leaving the existing dpctl-macos in place)"
+  echo "    (not on macOS — leaving the existing devpipe-macos in place)"
 fi
 
 echo "==> bundling the app"
@@ -93,25 +93,33 @@ echo "==> uploading"
 # lander.js goes with them. It is the lander's behaviour, external rather than
 # inline so that script-src can refuse 'unsafe-inline'; leaving it behind gives
 # a page whose claim form silently does nothing.
-for page in index.html terms.html privacy.html aup.html lander.js \
-            asylum.html asylum-docs.html asylum-class.html asylum.css self-host.html; do
+for page in index.html terms.html privacy.html aup.html lander.js site.css self-host.html; do
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/var/www/devpipe/$page"
   scp "${SCP[@]}" -q "$SITE/$page" "root@$HOST:/opt/devpipe/site/$page"
 done
-# Pricing was withdrawn before launch; a copy left on the box would still be
-# served, and it quotes numbers that no longer stand.
-"${SSH[@]}" "rm -f /var/www/devpipe/pricing.html /opt/devpipe/site/pricing.html"
+# Withdrawn pages must disappear from both roots; otherwise Caddy can keep
+# serving a native client that no longer exists in the product.
+"${SSH[@]}" "rm -f \
+  /var/www/devpipe/pricing.html /opt/devpipe/site/pricing.html \
+  /var/www/devpipe/asylum.html /opt/devpipe/site/asylum.html \
+  /var/www/devpipe/asylum-docs.html /opt/devpipe/site/asylum-docs.html \
+  /var/www/devpipe/asylum-class.html /opt/devpipe/site/asylum-class.html \
+  /var/www/devpipe/asylum.css /opt/devpipe/site/asylum.css \
+  /var/www/devpipe/desktop.html /opt/devpipe/site/desktop.html \
+  /var/www/devpipe/desktop-docs.html /opt/devpipe/site/desktop-docs.html \
+  /var/www/devpipe/desktop-class.html /opt/devpipe/site/desktop-class.html \
+  /var/www/devpipe/desktop.css /opt/devpipe/site/desktop.css"
 scp "${SCP[@]}" -q "$SITE"/fonts/*.woff2 "root@$HOST:/var/www/devpipe/fonts/"
 scp "${SCP[@]}" -q "$SITE/Caddyfile" "root@$HOST:/etc/caddy/Caddyfile"
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpiped" "root@$HOST:/var/www/devpipe/dist/devpiped"
-# The vault CLI and MCP server a box installs alongside the daemon.
+# The vault CLI and MCP server a box installs alongside the daemon. It has a
+# distinct download name so the laptop CLI can own `devpipe` without ambiguity.
+scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpipe-vault" "root@$HOST:/var/www/devpipe/dist/devpipe-vault"
+# The human-facing CLI. Linux comes from the same container as the box binaries;
+# macOS is built natively above.
 scp "${SCP[@]}" -q "$ROOT/target-linux/release/devpipe" "root@$HOST:/var/www/devpipe/dist/devpipe"
-# `dpctl` runs on a laptop, not a box — it is here so `curl https://devpipe.com/dist/dpctl`
-# works on Linux. macOS and Windows builds need a real release job; this is the
-# one platform the box's own toolchain already cross-compiles for.
-scp "${SCP[@]}" -q "$ROOT/target-linux/release/dpctl" "root@$HOST:/var/www/devpipe/dist/dpctl"
-if [ -f "$ROOT/build/dist/dpctl-macos" ]; then
-  scp "${SCP[@]}" -q "$ROOT/build/dist/dpctl-macos" "root@$HOST:/var/www/devpipe/dist/dpctl-macos"
+if [ -f "$ROOT/build/dist/devpipe-macos" ]; then
+  scp "${SCP[@]}" -q "$ROOT/build/dist/devpipe-macos" "root@$HOST:/var/www/devpipe/dist/devpipe-macos"
 fi
 # The one-liner that fetches whichever of those two fits the machine.
 scp "${SCP[@]}" -q "$SITE/install.sh" "root@$HOST:/var/www/devpipe/install.sh"
@@ -135,9 +143,9 @@ install -m 0755 /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-api
 install -m 0755 /usr/local/bin/devpipe-web.new /usr/local/bin/devpipe-web
 rm -f /usr/local/bin/devpipe-api.new /usr/local/bin/devpipe-web.new
 chmod 0755 /var/www/devpipe/dist/devpiped
+chmod 0755 /var/www/devpipe/dist/devpipe-vault
 chmod 0755 /var/www/devpipe/dist/devpipe
-chmod 0755 /var/www/devpipe/dist/dpctl
-chmod 0755 /var/www/devpipe/dist/dpctl-macos 2>/dev/null || true
+chmod 0755 /var/www/devpipe/dist/devpipe-macos 2>/dev/null || true
 chmod 0644 /var/www/devpipe/install.sh
 
 id -u devpipe >/dev/null 2>&1 || useradd --system --home /opt/devpipe --shell /usr/sbin/nologin devpipe
@@ -249,4 +257,4 @@ EOF
 
 curl -fsS "https://$HOST/" >/dev/null
 curl -fsS "https://$HOST/api/ready" >/dev/null
-echo "==> https://devpipe.com  ·  app at /runs"
+echo "==> https://devpipe.com  ·  app at /terminals"

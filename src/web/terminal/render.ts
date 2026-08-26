@@ -8,8 +8,7 @@ import { FLAG, type Terminal } from "./vt.ts"
  * Canvas rather than DOM nodes: a full screen is several thousand cells, and
  * one element per cell makes scrolling a layout problem instead of a paint.
  * Rows are only redrawn when the emulator says they changed, so an idle
- * terminal costs nothing — the same damage-driven approach the iOS renderer
- * uses, for the same reason.
+ * terminal costs nothing; damage-driven painting keeps an idle session idle.
  */
 export class Renderer {
   private ctx: CanvasRenderingContext2D

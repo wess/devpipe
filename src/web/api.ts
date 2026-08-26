@@ -93,7 +93,7 @@ export type Catalog = {
   gpu_sizes: GpuSize[]
   regions: { slug: string; label: string }[]
   defaults: string[]
-  provider: "digitalocean" | "docker"
+  provider: "digitalocean" | "runpod" | "docker"
 }
 
 /**
@@ -195,9 +195,8 @@ export const register = async (input: {
   invite?: string
   setup_token?: string
 }) => {
-  // The token in the body is for iOS and dpctl, which keep theirs in a
-  // keychain. This client is handed a cookie it cannot read, and deliberately
-  // does nothing with the string.
+  // The token in the body is for the CLI, which keeps it in a system keychain.
+  // This client is handed a cookie it cannot read and ignores the string.
   const out = await call<{ token: string; user: User }>("POST", "/auth/register", input)
   setSession(out.user)
   return out.user
@@ -459,6 +458,7 @@ export type SetupState = {
   ssh_key_count: number
   spend_cap_cents: number
   sealed: boolean
+  provider: "digitalocean" | "runpod" | "docker"
 }
 
 export const setupState = () => call<SetupState>("GET", "/setup/state")
@@ -484,6 +484,7 @@ export const adminOverview = () =>
     waitlist: number
     suspended: number
     monthly_spend: number
+    provider: string
     provider_configured: boolean
     provider_error: string | null
   }>("GET", "/admin/overview")
@@ -498,17 +499,23 @@ export const adminSettings = () =>
     settings: Record<string, string>
     /** False for an admin: settings are the owner's to change. */
     can_edit: boolean
-    provider: { digitalocean: string | null }
+    provider: {
+      kind: "digitalocean" | "runpod" | "docker"
+      label: string
+      credential: string | null
+      configured: boolean
+      digitalocean: string | null
+    }
     /** Whether this instance encrypts its own credentials at rest. */
     secrets_sealed: boolean
   }>("GET", "/admin/settings")
 export const adminSaveSettings = (values: Record<string, string>) =>
   call<Record<string, string>>("PATCH", "/admin/settings", values)
 export const adminSaveProvider = (t: string) =>
-  call<{ ok: boolean; account: { email: string } }>("POST", "/admin/provider/digitalocean", {
+  call<{ ok: boolean; account: { label: string } }>("POST", "/admin/provider", {
     token: t,
   })
-export const adminClearProvider = () => call("DELETE", "/admin/provider/digitalocean")
+export const adminClearProvider = () => call("DELETE", "/admin/provider")
 export const adminDroplets = () => call<{ configured: boolean; droplets: any[] }>("GET", "/admin/droplets")
 export const adminAudit = () =>
   call<{ id: number; action: string; detail: string; created_at: string; email: string }[]>("GET", "/admin/audit")

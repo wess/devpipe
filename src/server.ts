@@ -7,7 +7,6 @@ import { setAppOrigin } from "./auth/cookie.ts"
 import { authRoutes } from "./auth/index.ts"
 import { passwordRoutes } from "./auth/password.ts"
 import { sessionRoutes } from "./auth/sessions.ts"
-import { companionRoutes } from "./boxes/companion.ts"
 import { boxRoutes, convergeFirewall, resumeProvisioning } from "./boxes/index.ts"
 import { expireDormant, reclaimIdle, sweepSpendCap } from "./boxes/reclaim.ts"
 import { broadcastRoutes } from "./broadcast/index.ts"
@@ -157,7 +156,6 @@ const baseFetch = router(
   ...vaultRoutes(db),
   ...boxVaultRoutes(db),
   ...terminalRoutes(db, config.appUrl),
-  ...companionRoutes(db),
   ...previewRoutes(db),
   ...shareRoutes(db, config.appUrl),
   ...adminRoutes(db),

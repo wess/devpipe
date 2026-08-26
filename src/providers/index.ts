@@ -1,11 +1,13 @@
 import type { Connection } from "@atlas/db"
 import { digitalOceanProvider } from "./digitalocean.ts"
 import { dockerProvider } from "./docker.ts"
+import { runpodProvider } from "./runpod.ts"
 import type { MachineProvider, ProviderKind } from "./types.ts"
 import { PROVIDER_KINDS, ProviderUnavailable } from "./types.ts"
 
 const providers: Record<ProviderKind, MachineProvider> = {
   digitalocean: digitalOceanProvider,
+  runpod: runpodProvider(),
   docker: dockerProvider(),
 }
 

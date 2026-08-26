@@ -27,14 +27,19 @@ fn workdir(name: &str) -> std::path::PathBuf {
 
 /// One request, headers and body, without a client crate.
 async fn call(port: u16, head: &str, body: &[u8]) -> (String, Vec<u8>) {
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
     socket.write_all(head.as_bytes()).await.unwrap();
     if !body.is_empty() {
         socket.write_all(body).await.unwrap();
     }
     let mut raw = Vec::new();
     socket.read_to_end(&mut raw).await.unwrap();
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(raw.len());
     let head = String::from_utf8_lossy(&raw[..split]).to_string();
     let body = raw.get(split + 4..).unwrap_or(&[]).to_vec();
     // A response with no length is chunked, which is correct of the server and
@@ -51,9 +56,15 @@ fn dechunk(raw: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut at = 0usize;
     loop {
-        let Some(eol) = raw[at..].windows(2).position(|w| w == b"\r\n") else { break };
+        let Some(eol) = raw[at..].windows(2).position(|w| w == b"\r\n") else {
+            break;
+        };
         let size = usize::from_str_radix(
-            String::from_utf8_lossy(&raw[at..at + eol]).split(';').next().unwrap_or("0").trim(),
+            String::from_utf8_lossy(&raw[at..at + eol])
+                .split(';')
+                .next()
+                .unwrap_or("0")
+                .trim(),
             16,
         )
         .unwrap_or(0);
@@ -89,7 +100,11 @@ async fn a_file_comes_back_byte_for_byte() {
     std::fs::write(dir.join("notes.md"), "# hello\n\u{1F600}\n").unwrap();
     let port = daemon().await;
 
-    let (head, body) = get(port, &format!("/v1/fs/read?path={}", q(&dir.join("notes.md")))).await;
+    let (head, body) = get(
+        port,
+        &format!("/v1/fs/read?path={}", q(&dir.join("notes.md"))),
+    )
+    .await;
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     assert_eq!(String::from_utf8_lossy(&body), "# hello\n\u{1F600}\n");
 }
@@ -115,7 +130,10 @@ async fn a_listing_puts_directories_first_and_names_symlinks() {
     assert_eq!(entries[2]["size"], 2);
     let link = entries.iter().find(|e| e["name"] == "z-link").unwrap();
     assert_eq!(link["link"], true);
-    assert_eq!(link["dir"], false, "a symlink to a file must not be reported as its target");
+    assert_eq!(
+        link["dir"], false,
+        "a symlink to a file must not be reported as its target"
+    );
 }
 
 #[tokio::test]
@@ -142,7 +160,10 @@ async fn a_written_file_is_never_half_a_file() {
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     // The parents were made on the way, because the alternative is a client
     // that has to mkdir each level before it can send anything.
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "key = \"value\"\n");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "key = \"value\"\n"
+    );
     // Nothing left behind.
     let strays: Vec<_> = std::fs::read_dir(target.parent().unwrap())
         .unwrap()
@@ -159,7 +180,11 @@ async fn a_directory_comes_back_as_one_archive() {
     std::fs::write(dir.join("project/src/main.rs"), "fn main() {}\n").unwrap();
     let port = daemon().await;
 
-    let (head, body) = get(port, &format!("/v1/fs/tar?path={}", q(&dir.join("project")))).await;
+    let (head, body) = get(
+        port,
+        &format!("/v1/fs/tar?path={}", q(&dir.join("project"))),
+    )
+    .await;
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     assert!(head.contains("project.tar.gz"), "{head}");
     // Gzip's magic, so this is an archive rather than an error page with a
@@ -179,7 +204,10 @@ async fn a_directory_comes_back_as_one_archive() {
         .unwrap();
     std::io::Write::write_all(child.stdin.as_mut().unwrap(), &body).unwrap();
     assert!(child.wait().unwrap().success());
-    assert_eq!(std::fs::read_to_string(out.join("project/src/main.rs")).unwrap(), "fn main() {}\n");
+    assert_eq!(
+        std::fs::read_to_string(out.join("project/src/main.rs")).unwrap(),
+        "fn main() {}\n"
+    );
 }
 
 #[tokio::test]
@@ -209,9 +237,17 @@ async fn a_missing_file_says_which_file() {
     // and the path is the entire question when the caller typed it.
     let dir = workdir("missing");
     let port = daemon().await;
-    let (head, body) = get(port, &format!("/v1/fs/read?path={}", q(&dir.join("nope.txt")))).await;
+    let (head, body) = get(
+        port,
+        &format!("/v1/fs/read?path={}", q(&dir.join("nope.txt"))),
+    )
+    .await;
     assert!(head.starts_with("HTTP/1.1 404"), "{head}");
-    assert!(String::from_utf8_lossy(&body).contains("nope.txt"), "{:?}", String::from_utf8_lossy(&body));
+    assert!(
+        String::from_utf8_lossy(&body).contains("nope.txt"),
+        "{:?}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 #[tokio::test]
@@ -241,6 +277,9 @@ async fn every_one_of_them_needs_the_token() {
             b"",
         )
         .await;
-        assert!(head.starts_with("HTTP/1.1 401"), "{path} answered without a token: {head}");
+        assert!(
+            head.starts_with("HTTP/1.1 401"),
+            "{path} answered without a token: {head}"
+        );
     }
 }

@@ -161,7 +161,7 @@ const Overview: React.FC = () => {
       )}
       {!data.provider_configured && (
         <p className="note warn">
-          No provider is connected, so nobody can create a box. Add a DigitalOcean token under Settings.
+          {data.provider} is not configured, so nobody can create a box. Finish its setup under Settings.
         </p>
       )}
       {data.provider_error && <p className="note bad">{data.provider_error}</p>}
@@ -384,39 +384,48 @@ const InstanceSettings: React.FC<{
     <>
       <section className="card">
         <h2>Provider</h2>
-        <p className="note warn">
-          This token can create and destroy every box on the account. It is stored server-side and never sent back to a
-          browser. If this machine is compromised, revoke it in the DigitalOcean console rather than only deleting it
-          here.
-        </p>
-        <form
-          onSubmit={async e => {
-            e.preventDefault()
-            try {
-              const out = await api.adminSaveProvider(token)
-              setToken("")
-              onNote({ kind: "ok", text: `Connected as ${out.account.email}.` })
-              void refresh()
-            } catch (err: any) {
-              onNote({ kind: "bad", text: String(err.message) })
-            }
-          }}
-        >
-          <label className="field">
-            <span>
-              DigitalOcean API token
-              {data.provider.digitalocean && ` — currently ${data.provider.digitalocean}`}
-            </span>
-            <input
-              type="password"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              placeholder="dop_v1_…"
-              required
-            />
-          </label>
-          <button type="submit">{data.provider.digitalocean ? "Replace" : "Connect"}</button>
-        </form>
+        {data.provider.kind === "docker" ? (
+          <p className={data.provider.configured ? "note ok" : "note warn"}>
+            Local Docker is configured on the host. Build the Devpipe box image and keep the Docker daemon available to
+            this service.
+          </p>
+        ) : (
+          <>
+            <p className="note warn">
+              This credential can create and destroy every box on the account. It is stored server-side and never sent
+              back to a browser. If this machine is compromised, revoke it in the {data.provider.label} console rather
+              than only deleting it here.
+            </p>
+            <form
+              onSubmit={async e => {
+                e.preventDefault()
+                try {
+                  const out = await api.adminSaveProvider(token)
+                  setToken("")
+                  onNote({ kind: "ok", text: `Connected ${out.account.label}.` })
+                  void refresh()
+                } catch (err: any) {
+                  onNote({ kind: "bad", text: String(err.message) })
+                }
+              }}
+            >
+              <label className="field">
+                <span>
+                  {data.provider.label} API credential
+                  {data.provider.credential && ` — currently ${data.provider.credential}`}
+                </span>
+                <input
+                  type="password"
+                  value={token}
+                  onChange={e => setToken(e.target.value)}
+                  placeholder={data.provider.kind === "runpod" ? "rpa_…" : "dop_v1_…"}
+                  required
+                />
+              </label>
+              <button type="submit">{data.provider.credential ? "Replace" : "Connect"}</button>
+            </form>
+          </>
+        )}
         {/* Said rather than left to be assumed. This token creates and destroys
             every droplet on the account and spends money with no ceiling, and
             backups of the table it lives in leave the database host. Whether it
@@ -429,7 +438,7 @@ const InstanceSettings: React.FC<{
             values are encrypted the next time they are read.
           </p>
         )}
-        {data.provider.digitalocean && (
+        {data.provider.credential && (
           <button
             type="button"
             className="ghost"

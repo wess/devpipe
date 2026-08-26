@@ -11,7 +11,7 @@ export const passwordResetEmail = (input: { name?: string | null; resetUrl: stri
     "",
     input.resetUrl,
     "",
-    "The link works once and expires in an hour. Setting a new password also signs you out everywhere, including on your iPad.",
+    "The link works once and expires in an hour. Setting a new password also signs out your browsers and CLI sessions.",
     "",
     "If this wasn't you, ignore this email. Your password stays as it is.",
     "",
@@ -22,7 +22,7 @@ export const passwordResetEmail = (input: { name?: string | null; resetUrl: stri
     <p>Hi ${escapeHtml(greeting)},</p>
     <p>Someone asked to reset the password on your Devpipe account. Set a new one below.</p>
     ${linkBlock(input.resetUrl, "Set a new password")}
-    <p class="quiet">The link works once and expires in an hour. Setting a new password also signs you out everywhere, including on your iPad.</p>
+    <p class="quiet">The link works once and expires in an hour. Setting a new password also signs out your browsers and CLI sessions.</p>
     <p class="quiet">If this wasn't you, ignore this email. Your password stays as it is.</p>
   `
 

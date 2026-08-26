@@ -12,7 +12,7 @@ export const inviteEmail = (input: {
   const code = input.code?.trim() || ""
 
   const text = [
-    `${inviter} invited you to Devpipe — a Linux box that stays running, with coding-agent CLIs on it, reachable from a browser or an iPad.`,
+    `${inviter} invited you to Devpipe — a Linux box that keeps coding agents running, reachable from the web or the Devpipe CLI.`,
     "",
     input.note ? `Their note:\n"${input.note}"\n` : null,
     "Sign up here:",
@@ -35,7 +35,7 @@ export const inviteEmail = (input: {
     : ""
 
   const body = `
-    <p><strong>${escapeHtml(inviter)}</strong> invited you to Devpipe — a Linux box that stays running, with coding-agent CLIs on it, reachable from a browser or an iPad.</p>
+    <p><strong>${escapeHtml(inviter)}</strong> invited you to Devpipe — a Linux box that keeps coding agents running, reachable from the web or the Devpipe CLI.</p>
     ${noteBlock}
     ${linkBlock(input.signupUrl, "Accept invite")}
     ${codeBlock}

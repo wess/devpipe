@@ -37,8 +37,16 @@ fn upstream_uri(rest: &str, query: Option<&str>) -> Result<Uri, InvalidUri> {
         .split('&')
         .filter(|p| !p.is_empty() && !p.starts_with("token="))
         .collect();
-    let path = if rest.starts_with('/') { rest.to_string() } else { format!("/{rest}") };
-    if kept.is_empty() { path.parse() } else { format!("{path}?{}", kept.join("&")).parse() }
+    let path = if rest.starts_with('/') {
+        rest.to_string()
+    } else {
+        format!("/{rest}")
+    };
+    if kept.is_empty() {
+        path.parse()
+    } else {
+        format!("{path}?{}", kept.join("&")).parse()
+    }
 }
 
 pub async fn proxy_root(
@@ -97,11 +105,12 @@ async fn run(
     };
     let _ = stream.set_nodelay(true);
 
-    let (mut sender, connection) =
-        match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
-            Ok(pair) => pair,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("port {port}: {e}")).into_response(),
-        };
+    let (mut sender, connection) = match hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+    {
+        Ok(pair) => pair,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("port {port}: {e}")).into_response(),
+    };
     // `with_upgrades` rather than the plain future: without it a 101 from the
     // dev server is a dead end, and a dev server without its websocket is a
     // page that loads once and never live-reloads again.
@@ -119,7 +128,9 @@ async fn run(
     // preview hostname rather than anything on this machine. Dev servers check
     // it: Vite refuses a host that is not in `allowedHosts`, which presents as
     // a blank page and is indistinguishable from the proxy being broken.
-    parts.headers.insert(header::HOST, format!("127.0.0.1:{port}").parse().unwrap());
+    parts
+        .headers
+        .insert(header::HOST, format!("127.0.0.1:{port}").parse().unwrap());
 
     let mut upstream = match sender.send_request(Request::from_parts(parts, body)).await {
         Ok(res) => res,
@@ -136,8 +147,9 @@ async fn run(
                 let (Ok(down), Ok(up)) = tokio::join!(downstream_upgrade, upstream_upgrade) else {
                     return;
                 };
-                let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(down), &mut TokioIo::new(up))
-                    .await;
+                let _ =
+                    tokio::io::copy_bidirectional(&mut TokioIo::new(down), &mut TokioIo::new(up))
+                        .await;
             });
         }
         return HttpResponse::from_parts(parts, Body::empty());
@@ -149,7 +161,9 @@ async fn run(
     // answers 404 to everything here, which is indistinguishable from a dev
     // server's own 404 — and sends somebody to debug their routes when the real
     // answer is that the machine needs waking.
-    parts.headers.insert("x-devpipe-proxy", "1".parse().unwrap());
+    parts
+        .headers
+        .insert("x-devpipe-proxy", "1".parse().unwrap());
     HttpResponse::from_parts(parts, Body::new(incoming))
 }
 

@@ -31,7 +31,13 @@ pub fn screen_as_ansi(term: &mut Terminal) -> Vec<u8> {
 
     let (cols, rows) = (term.cols(), term.rows());
     for r in 0..rows {
-        let row: Vec<Cell> = term.visible_row(r).cells.iter().take(cols).copied().collect();
+        let row: Vec<Cell> = term
+            .visible_row(r)
+            .cells
+            .iter()
+            .take(cols)
+            .copied()
+            .collect();
 
         // Trailing blanks cost bytes and paint nothing over a just-cleared
         // screen.
@@ -65,7 +71,11 @@ pub fn screen_as_ansi(term: &mut Terminal) -> Vec<u8> {
 
     let (cr, cc) = term.cursor_pos();
     let _ = write!(out, "\x1b[{};{}H", cr + 1, cc + 1);
-    out.push_str(if term.cursor_visible() { "\x1b[?25h" } else { "\x1b[?25l" });
+    out.push_str(if term.cursor_visible() {
+        "\x1b[?25h"
+    } else {
+        "\x1b[?25l"
+    });
     if term.bracketed_paste() {
         out.push_str("\x1b[?2004h");
     }
@@ -124,7 +134,9 @@ mod tests {
     }
 
     fn text(t: &mut Terminal) -> Vec<String> {
-        (0..t.rows()).map(|r| t.row_text(r).trim_end().to_string()).collect()
+        (0..t.rows())
+            .map(|r| t.row_text(r).trim_end().to_string())
+            .collect()
     }
 
     #[test]

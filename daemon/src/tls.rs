@@ -61,7 +61,11 @@ pub fn load_or_generate(dir: &Path, extra_sans: &[String]) -> Result<Tls> {
         let key_pem = fs::read_to_string(&key_path)
             .with_context(|| format!("reading {}", key_path.display()))?;
         let fingerprint = fingerprint_of_pem(&cert_pem)?;
-        return Ok(Tls { cert_pem, key_pem, fingerprint });
+        return Ok(Tls {
+            cert_pem,
+            key_pem,
+            fingerprint,
+        });
     }
 
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -82,8 +86,8 @@ pub fn load_or_generate(dir: &Path, extra_sans: &[String]) -> Result<Tls> {
             sans.push(san.clone());
         }
     }
-    let generated = rcgen::generate_simple_self_signed(sans)
-        .context("generating a self-signed certificate")?;
+    let generated =
+        rcgen::generate_simple_self_signed(sans).context("generating a self-signed certificate")?;
 
     let cert_pem = generated.cert.pem();
     let key_pem = generated.key_pair.serialize_pem();
@@ -93,7 +97,11 @@ pub fn load_or_generate(dir: &Path, extra_sans: &[String]) -> Result<Tls> {
     fs::write(&key_path, &key_pem)?;
     restrict_to_owner(&key_path)?;
 
-    Ok(Tls { cert_pem, key_pem, fingerprint })
+    Ok(Tls {
+        cert_pem,
+        key_pem,
+        fingerprint,
+    })
 }
 
 /// A private key readable by every account on the box is not a private key.

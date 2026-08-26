@@ -72,9 +72,8 @@ describe("what signing in hands back", () => {
     setAppOrigin(APP)
   })
 
-  test("the token still comes back in the body, for the clients with keychains", async () => {
-    // iOS and dpctl keep theirs somewhere no web page can reach, so there is
-    // nothing to gain by moving them and a working thing to break.
+  test("the token still comes back in the body, for the CLI keychain", async () => {
+    // The CLI keeps it somewhere no web page can reach.
     const { data } = await register()
     expect(typeof data.token).toBe("string")
     expect(data.token.length).toBeGreaterThan(20)

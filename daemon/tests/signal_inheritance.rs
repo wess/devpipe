@@ -23,7 +23,10 @@ fn ignore_sigint() {
 
 fn sigint_reaches_a_child() -> bool {
     let mut opts = SpawnOptions::command(
-        ["/bin/bash", "--norc"].iter().map(|s| s.to_string()).collect(),
+        ["/bin/bash", "--norc"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     );
     opts.winsize = Winsize::new(80, 24);
     opts.env.push(("TERM".into(), "xterm-256color".into()));

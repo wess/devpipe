@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Devpipe — your agents keep working after you disconnect</title>
-<meta name="description" content="Give a task to several coding agents at once, each on its own branch, on a machine that keeps working after you close the laptop.">
+<title>Devpipe: your agents keep working after you disconnect</title>
+<meta name="description" content="Run coding agents in persistent remote terminals, then reconnect from the web or with devpipe attach after you close the laptop.">
 <meta name="theme-color" content="#0B0E14">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
 
@@ -201,8 +201,7 @@ h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: bl
 .term-bar .sid { color: var(--text); }
 .term-bar .spacer { flex: 1; }
 .uptime { color: var(--amber); font-variant-numeric: tabular-nums; }
-/* A run is an agent, a branch, and a state. The bar carries all three,
-   because they are what tells two runs of the same task apart. */
+/* The bar carries the workspace, agent, and uptime at a glance. */
 .term-bar .branch { color: var(--dim); }
 .term-bar .state {
   display: inline-flex;
@@ -311,7 +310,7 @@ h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: bl
   display: grid;
   /* Two columns, not three: four facts in a 2×2 read as a set, where 3+1
      leaves the last one stranded in a row of its own.
-     `min(24rem, 100%)` rather than a bare 24rem — a track whose minimum
+     `min(24rem, 100%)` rather than a bare 24rem: a track whose minimum
      exceeds the container overflows it, and `overflow-x: hidden` on body
      would hide that by clipping the text off a phone instead of reflowing. */
   grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
@@ -518,7 +517,7 @@ footer {
     </div>
     <div class="rail-status">
       <span class="dot" aria-hidden="true"></span>
-      <span class="label">Coming soon</span>
+      <span class="label">Web + CLI beta</span>
     </div>
   </header>
 
@@ -530,16 +529,16 @@ footer {
         <span class="quiet">It keeps building.</span>
       </h1>
       <p class="lede">
-        Hand a task to an agent — or to three of them at once, each on its own
-        branch — and walk away. <strong>Nothing stops.</strong> Come back to
-        finished work and pick the one that won.
+        Start an agent in a persistent remote terminal and walk away.
+        <strong>Nothing stops.</strong> Reconnect to the same session from the
+        browser or with <code>devpipe attach</code>.
       </p>
 
       <div class="stage">
         <div class="term" id="term">
           <div class="term-bar">
-            <span class="sid">token refresh drops sessions</span>
-            <span class="branch">auth/token-skew</span>
+            <span class="sid">devpipe-api</span>
+            <span class="branch">~/work/devpipe</span>
             <span class="spacer"></span>
             <span class="state">claude</span>
             <span class="uptime" id="uptime">00:00:00</span>
@@ -549,7 +548,7 @@ footer {
 
         <div class="away-card" id="away">
           <div class="small">You closed the tab</div>
-          <div class="big">The run is still going · <span class="counter" id="awaySecs">0s</span></div>
+          <div class="big">The session is still going · <span class="counter" id="awaySecs">0s</span></div>
         </div>
 
         <p class="resumed" id="resumed"></p>
@@ -594,7 +593,7 @@ footer {
           <div>
             <h3>Keys stay out of your dotfiles</h3>
             <p>
-              Secrets are sealed on the server and granted to a box — global,
+              Secrets are sealed on the server and granted to a box: global,
               per workspace, or per machine. Revoke one and the box loses it on
               the next read.
             </p>
@@ -603,15 +602,16 @@ footer {
       </ul>
 
       <p class="aside">
-        The desktop side already exists and is free: <b>Asylum</b> races several
-        coding agents at the same task, each in its own worktree, and lets you
-        merge whichever one won. <a href="/asylum.html">Take it now</a> — Devpipe
-        is what it reaches for when your laptop is not enough.
+        The browser is the workspace. When you want the terminal directly,
+        install the small CLI, sign in once, and run
+        <code>devpipe attach &lt;box&gt;</code>. It wakes a sleeping machine,
+        reconnects to the persistent session, and leaves the agent running when
+        you detach.
       </p>
 
       <p class="tease">
         And when the agent says it is done, you can look: a port on the box
-        opens in your own browser — privately, or as a link that expires — and
+        opens in your own browser, privately or as a link that expires, and
         a terminal on it can be watched, or handed over, by someone who has no
         account here at all.
       </p>
@@ -620,9 +620,9 @@ footer {
     <section class="brief">
       <h2>Or run the whole thing yourself</h2>
       <p class="lede">
-        Devpipe is <strong>Apache-2.0</strong>. DigitalOcean is the production
-        backend we run; local Docker implements the same machine lifecycle for
-        development. No crippled edition, no feature held back.
+        Devpipe is <strong>Apache-2.0</strong>. DigitalOcean, Runpod, and local
+        Docker implement the same durable machine lifecycle. No crippled
+        edition, no feature held back.
       </p>
       <ul class="facts">
         <li class="fact">
@@ -642,7 +642,7 @@ footer {
             <h3>One owner, admins under them</h3>
             <p>
               An admin invites people, suspends an abuser and reads the audit
-              log. An admin never sees a credential — which is the whole reason
+              log. An admin never sees a credential, which is the whole reason
               the role exists.
             </p>
           </div>
@@ -652,18 +652,18 @@ footer {
           <div>
             <h3>A cap, because the bill is yours</h3>
             <p>
-              Droplets and volumes both, accumulated over the provider's own
-              month. Past it nothing new starts and what is running goes to
-              sleep with its files intact.
+              Machines and workspaces are accumulated over the provider's own
+              month. Past the cap nothing new starts and what is running goes
+              to sleep with its files intact.
             </p>
           </div>
         </li>
       </ul>
 
       <p class="aside">
-        <a href="/self-host.html">What it takes to run one</a> — production
-        DigitalOcean, local Docker, safe deployment, and an honest list of what
-        the hosted instance does that you would have to.
+        <a href="/self-host.html">What it takes to run one</a>: production
+        DigitalOcean, Runpod, local Docker, safe deployment, and an honest list
+        of what the hosted instance does that you would have to.
       </p>
     </section>
 
@@ -699,9 +699,9 @@ footer {
       <!-- The only route from the lander into the app. Without it the app is
            reachable only by knowing the path to type, which is fine while the
            audience is one person and not once anybody has an account. -->
-      <a href="/runs">Sign in</a>
+      <a href="/terminals">Sign in</a>
       <a href="/self-host.html">Self-host</a>
-      <a href="/asylum.html">Asylum</a>
+      <a href="https://devpipe.com/install.sh">CLI</a>
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>
       <a href="/aup.html">Acceptable use</a>

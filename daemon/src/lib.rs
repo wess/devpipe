@@ -48,8 +48,12 @@ struct CreateReq {
     #[serde(default = "default_rows")]
     rows: u16,
 }
-fn default_cols() -> u16 { 80 }
-fn default_rows() -> u16 { 24 }
+fn default_cols() -> u16 {
+    80
+}
+fn default_rows() -> u16 {
+    24
+}
 
 #[derive(Serialize)]
 struct SessionInfo {
@@ -77,7 +81,11 @@ enum ClientMsg {
 enum ServerMsg {
     /// Sent once on attach, before the replay bytes, so the client can size
     /// its emulator before parsing anything.
-    Hello { id: String, cols: u16, rows: u16 },
+    Hello {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
     /// The client fell far enough behind that the backlog dropped frames;
     /// the bytes that follow are a fresh screen, not a continuation.
     Resync,
@@ -85,7 +93,10 @@ enum ServerMsg {
     /// Nothing is listening on that port of the box. Said in words rather than
     /// left as a close frame, because "connection refused" from a forwarded
     /// port is otherwise indistinguishable from the tunnel itself failing.
-    Refused { port: u16, why: String },
+    Refused {
+        port: u16,
+        why: String,
+    },
 }
 
 /// Put the terminal and job-control signals back to their default
@@ -233,7 +244,9 @@ fn same_secret(a: &str, b: &str) -> bool {
 /// Only the control plane should ever hold one. Anything a browser is given
 /// goes through `authorized_attach` instead.
 pub(crate) fn authorized(app: &App, headers: &HeaderMap, q: &TokenQuery) -> bool {
-    presented(headers, q).map(|t| same_secret(t, app.token.as_str())).unwrap_or(false)
+    presented(headers, q)
+        .map(|t| same_secret(t, app.token.as_str()))
+        .unwrap_or(false)
 }
 
 /// The full credential, **or** a scoped token that says only "attach to this".
@@ -283,8 +296,13 @@ async fn list_sessions(
     if !authorized(&app, &headers, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let mut out: Vec<SessionInfo> =
-        app.sessions.read().unwrap().values().map(info_for).collect();
+    let mut out: Vec<SessionInfo> = app
+        .sessions
+        .read()
+        .unwrap()
+        .values()
+        .map(info_for)
+        .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Json(out).into_response()
 }
@@ -347,7 +365,9 @@ async fn forward(
     Query(q): Query<ForwardQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let auth = TokenQuery { token: q.token.clone() };
+    let auth = TokenQuery {
+        token: q.token.clone(),
+    };
     if !authorized(&app, &headers, &auth) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -372,7 +392,11 @@ async fn splice(socket: WebSocket, port: u16) {
             let mut socket = socket;
             let _ = socket
                 .send(Message::Text(
-                    json(&ServerMsg::Refused { port, why: e.to_string() }).into(),
+                    json(&ServerMsg::Refused {
+                        port,
+                        why: e.to_string(),
+                    })
+                    .into(),
                 ))
                 .await;
             return;
@@ -391,7 +415,11 @@ async fn splice(socket: WebSocket, port: u16) {
             match read.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                    if tx
+                        .send(Message::Binary(buf[..n].to_vec().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -403,10 +431,9 @@ async fn splice(socket: WebSocket, port: u16) {
     let mut up = tokio::spawn(async move {
         while let Some(Ok(message)) = rx.next().await {
             match message {
-                Message::Binary(bytes)
-                    if write.write_all(&bytes).await.is_err() => {
-                        break;
-                    }
+                Message::Binary(bytes) if write.write_all(&bytes).await.is_err() => {
+                    break;
+                }
                 Message::Close(_) => break,
                 _ => {}
             }
@@ -453,11 +480,19 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
     let mut feed = session.subscribe();
 
     let (cols, rows) = session.size();
-    let hello = ServerMsg::Hello { id: session.id.clone(), cols, rows };
+    let hello = ServerMsg::Hello {
+        id: session.id.clone(),
+        cols,
+        rows,
+    };
     if tx.send(Message::Text(json(&hello).into())).await.is_err() {
         return;
     }
-    if tx.send(Message::Binary(session.replay().into())).await.is_err() {
+    if tx
+        .send(Message::Binary(session.replay().into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -471,7 +506,7 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
             let received = tokio::select! {
                 // Biased so buffered output always wins a tie: the last thing a
                 // command printed must reach the client before the notice that
-                // it finished, or `dpctl run` loses its final line.
+                // it finished, or `devpipe run` loses its final line.
                 biased;
                 chunk = feed.recv() => chunk,
                 _ = &mut gone => {
@@ -481,7 +516,11 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
             };
             match received {
                 Ok(chunk) => {
-                    if tx.send(Message::Binary(chunk.as_slice().to_vec().into())).await.is_err() {
+                    if tx
+                        .send(Message::Binary(chunk.as_slice().to_vec().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -493,7 +532,11 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
                     if tx.send(Message::Text(notice.into())).await.is_err() {
                         break;
                     }
-                    if tx.send(Message::Binary(writer.replay().into())).await.is_err() {
+                    if tx
+                        .send(Message::Binary(writer.replay().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -512,13 +555,13 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
     // after its child is gone, so that never fired for a command that simply
     // finished. Every client was left waiting on a socket that would never say
     // anything again: the web terminal showed a live session, and
-    // `dpctl run box -- cmd` hung forever after printing its output.
+    // `devpipe run box -- cmd` hung forever after printing its output.
     //
     // Polled rather than signalled because `alive` is an AtomicBool and giving
     // it a Notify means threading one through the pty reader for a quarter of a
     // second of latency nobody can perceive.
     // `interval_at`, not `interval`: the latter completes its first tick
-    // immediately, so a command that finishes fast — which is every `dpctl run`
+    // immediately, so a command that finishes fast — which is every `devpipe run`
     // — was declared over before the pump had written a single byte.
     let beat = std::time::Duration::from_millis(250);
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + beat, beat);
@@ -558,7 +601,6 @@ async fn drive(socket: WebSocket, session: Arc<Session>) {
     }
     pump.abort();
 }
-
 
 fn json<T: Serialize>(v: &T) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "{}".into())

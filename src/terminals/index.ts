@@ -124,7 +124,13 @@ export const terminalSocket = (db: Connection) => async (req: Request) => {
   )) as any
   if (!box || box.status !== "ready" || !box.endpoint) return null
 
-  const token = String(url.searchParams.get("token") ?? "")
+  // Browsers cannot add an Authorization header to a WebSocket handshake, so
+  // the web terminal uses the short-lived query credential. The CLI can and
+  // does use the header, keeping the token out of command output and proxy
+  // access logs. Both are the same scoped two-minute credential.
+  const token = String(
+    url.searchParams.get("token") ?? (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, ""),
+  ).trim()
   const scope = verifyForBox(box.agent_token, token)
   const session = decodeURIComponent(match[3])
   if (scope !== ATTACH && scope !== `${ATTACH}:${session}`) return null

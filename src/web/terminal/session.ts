@@ -4,11 +4,9 @@ import { Terminal } from "./vt.ts"
 /**
  * One attached terminal: the emulator, the socket, and the reconnection.
  *
- * A direct mirror of the iOS `WebSocketSource`, including why it reconnects on
- * its own. A browser tab that has been backgrounded gets its socket dropped
- * the same way a suspended app does, and without reconnection the persistence
- * the daemon provides is invisible — the session really is still running, but
- * the only way to see it again is a page reload.
+ * A browser tab that has been backgrounded often gets its socket dropped. It
+ * reconnects on its own so the daemon's persistence is visible without a page
+ * reload: the session kept running even though the transport did not.
  */
 export class Session {
   term: Terminal | null = null

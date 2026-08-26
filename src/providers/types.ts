@@ -1,6 +1,6 @@
 import type { Connection } from "@atlas/db"
 
-export const PROVIDER_KINDS = ["digitalocean", "docker"] as const
+export const PROVIDER_KINDS = ["digitalocean", "runpod", "docker"] as const
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number]
 

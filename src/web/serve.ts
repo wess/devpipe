@@ -57,15 +57,7 @@ if (!wasmBytes) {
 const wasmEtag = wasmBytes ? `"${Bun.hash(new Uint8Array(wasmBytes)).toString(16)}"` : '""'
 
 /** Static pages that sit next to the lander in `site/`. */
-const PAGES = new Set([
-  "/terms.html",
-  "/privacy.html",
-  "/aup.html",
-  "/asylum.html",
-  "/asylum-docs.html",
-  "/asylum-class.html",
-  "/self-host.html",
-])
+const PAGES = new Set(["/terms.html", "/privacy.html", "/aup.html", "/self-host.html"])
 
 /**
  * Stylesheets served from `site/`, allow-listed the same way the pages are.
@@ -74,7 +66,7 @@ const PAGES = new Set([
  * stylesheet answered as HTML is not applied by any browser — it fails as a
  * blank page rather than as an error anyone would think to look for.
  */
-const STYLES = new Set(["/asylum.css"])
+const STYLES = new Set(["/site.css"])
 
 /**
  * The lander's behaviour, in a file rather than a `<script>` block.
@@ -162,9 +154,6 @@ const server = Bun.serve({
     }
 
     // The API is a separate process; the browser only ever talks to this one.
-    // Asylum's companion goes through it too, as `/api/boxes/:id/companion/*`
-    // — one session, one place that holds a box's credential, and nothing here
-    // that has to know a companion exists.
     if (path.startsWith("/api/")) {
       const target = new URL(path + url.search, API)
       try {

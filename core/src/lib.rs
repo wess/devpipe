@@ -1,4 +1,4 @@
-//! A C ABI over sinclair's `vt` so a Swift client can own terminal state.
+//! A compact exported API over sinclair's `vt` for the browser terminal.
 //!
 //! The client runs the emulator locally and the server ships raw PTY bytes.
 //! That is what buys local echo: a keystroke paints before the round trip.
@@ -6,15 +6,15 @@
 //! on every character, which on cellular is the difference between a terminal
 //! that feels alive and one that does not.
 //!
-//! Swift never touches a `Cell`. It calls `feed`, then reads a packed
-//! `[DpCell]` for the visible screen in one go; per-cell FFI calls across
+//! JavaScript never touches a `Cell`. It calls `feed`, then reads a packed
+//! `[DpCell]` for the visible screen in one go; per-cell boundary calls across
 //! 10k cells a frame would cost more than the emulation does.
 
 use std::ffi::c_char;
 use vt::selection::{Point, SelectionMode};
 use vt::{Cell, CellFlags, Color, Modes, MouseMode, Terminal};
 
-/// Owns the emulator plus the snapshot buffer we hand back to Swift.
+/// Owns the emulator plus the snapshot buffer we hand back to the host.
 pub struct DpTerm {
     term: Terminal,
     cells: Vec<DpCell>,
@@ -38,7 +38,7 @@ pub struct DpTerm {
 }
 
 /// One cell, flattened for the renderer. 16 bytes, `Copy`, no pointers — the
-/// whole visible grid is one contiguous read on the Swift side.
+/// whole visible grid is one contiguous read from WebAssembly memory.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DpCell {
@@ -154,7 +154,8 @@ pub unsafe extern "C" fn dp_term_feed(t: *mut DpTerm, bytes: *const u8, len: usi
     if bytes.is_null() || len == 0 {
         return;
     }
-    t.term.feed(unsafe { std::slice::from_raw_parts(bytes, len) });
+    t.term
+        .feed(unsafe { std::slice::from_raw_parts(bytes, len) });
 }
 
 /// # Safety
@@ -252,11 +253,7 @@ pub unsafe extern "C" fn dp_term_title(t: *mut DpTerm) -> *const c_char {
 /// # Safety
 /// `t` must come from `dp_term_new`; `rows` must be writable for `cap` u32s.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dp_term_take_damage(
-    t: *mut DpTerm,
-    rows: *mut u32,
-    cap: usize,
-) -> i32 {
+pub unsafe extern "C" fn dp_term_take_damage(t: *mut DpTerm, rows: *mut u32, cap: usize) -> i32 {
     let Some(t) = (unsafe { t.as_mut() }) else {
         return 0;
     };
@@ -382,7 +379,12 @@ pub unsafe extern "C" fn dp_term_key_modes(t: *mut DpTerm) -> u32 {
 /// # Safety
 /// `t` must come from `dp_term_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dp_term_selection_start(t: *mut DpTerm, line: isize, col: usize, mode: u32) {
+pub unsafe extern "C" fn dp_term_selection_start(
+    t: *mut DpTerm,
+    line: isize,
+    col: usize,
+    mode: u32,
+) {
     let Some(t) = (unsafe { t.as_mut() }) else {
         return;
     };
@@ -757,8 +759,7 @@ mod tests {
             _pad: 0,
         };
         let p = unsafe { dp_term_snapshot(t, &mut s) };
-        let cells =
-            unsafe { std::slice::from_raw_parts(p, (s.cols * s.rows) as usize) }.to_vec();
+        let cells = unsafe { std::slice::from_raw_parts(p, (s.cols * s.rows) as usize) }.to_vec();
         (s, cells)
     }
 
@@ -871,11 +872,19 @@ mod tests {
         feed_lines(t, 10);
 
         unsafe { dp_term_scroll(t, 9999) };
-        assert_eq!(unsafe { dp_term_display_offset(t) }, 7, "stops at the oldest row");
+        assert_eq!(
+            unsafe { dp_term_display_offset(t) },
+            7,
+            "stops at the oldest row"
+        );
         assert_eq!(row_text(t, 0), "line 0");
 
         unsafe { dp_term_scroll(t, -9999) };
-        assert_eq!(unsafe { dp_term_display_offset(t) }, 0, "and cannot go below live");
+        assert_eq!(
+            unsafe { dp_term_display_offset(t) },
+            0,
+            "and cannot go below live"
+        );
         unsafe { dp_term_free(t) };
     }
 
@@ -930,7 +939,11 @@ mod tests {
 
         unsafe { dp_term_reset(t) };
         assert_eq!(unsafe { dp_term_scrollback_len(t) }, 0);
-        assert_eq!(row_text(t, 0), "", "the previous session must not show through");
+        assert_eq!(
+            row_text(t, 0),
+            "",
+            "the previous session must not show through"
+        );
         // Same pointer, still usable: a renderer holding it is not left with a
         // dangling one.
         unsafe { dp_term_feed(t, b"after".as_ptr(), 5) };
@@ -942,8 +955,15 @@ mod tests {
     fn a_bell_is_reported_once() {
         let t = dp_term_new(20, 4, 0);
         unsafe { dp_term_feed(t, b"\x07".as_ptr(), 1) };
-        assert_eq!(unsafe { dp_term_take_events(t) } & DP_EVENT_BELL, DP_EVENT_BELL);
-        assert_eq!(unsafe { dp_term_take_events(t) } & DP_EVENT_BELL, 0, "drained");
+        assert_eq!(
+            unsafe { dp_term_take_events(t) } & DP_EVENT_BELL,
+            DP_EVENT_BELL
+        );
+        assert_eq!(
+            unsafe { dp_term_take_events(t) } & DP_EVENT_BELL,
+            0,
+            "drained"
+        );
         unsafe { dp_term_free(t) };
     }
 
@@ -983,10 +1003,15 @@ mod tests {
     #[test]
     fn search_finds_hits_in_history_and_on_screen() {
         let t = dp_term_new(20, 4, 100);
-        feed_lines(t, 10);  // "line 0".."line 9", seven rows into scrollback
+        feed_lines(t, 10); // "line 0".."line 9", seven rows into scrollback
 
         let needle = std::ffi::CString::new("line 1").unwrap();
-        let mut hits = [DpMatch { line: 0, start_col: 0, end_col: 0, _pad: 0 }; 8];
+        let mut hits = [DpMatch {
+            line: 0,
+            start_col: 0,
+            end_col: 0,
+            _pad: 0,
+        }; 8];
         let n = unsafe { dp_term_search(t, needle.as_ptr(), 1, hits.as_mut_ptr(), 8) };
         // "line 1" matches its own row and is a prefix of nothing else here.
         assert_eq!(n, 1);
@@ -1007,7 +1032,12 @@ mod tests {
         let t = dp_term_new(20, 6, 100);
         feed_lines(t, 10);
         let needle = std::ffi::CString::new("line").unwrap();
-        let mut two = [DpMatch { line: 0, start_col: 0, end_col: 0, _pad: 0 }; 2];
+        let mut two = [DpMatch {
+            line: 0,
+            start_col: 0,
+            end_col: 0,
+            _pad: 0,
+        }; 2];
         let n = unsafe { dp_term_search(t, needle.as_ptr(), 0, two.as_mut_ptr(), 2) };
         assert_eq!(n, 10, "the count is the truth, not what fitted");
         unsafe { dp_term_free(t) };
@@ -1018,7 +1048,11 @@ mod tests {
         let t = dp_term_new(20, 4, 0);
         assert_eq!(unsafe { dp_term_synchronized_output(t) }, 0);
         unsafe { dp_term_feed(t, b"\x1b[?2026h".as_ptr(), 8) };
-        assert_eq!(unsafe { dp_term_synchronized_output(t) }, 1, "hold the frame");
+        assert_eq!(
+            unsafe { dp_term_synchronized_output(t) },
+            1,
+            "hold the frame"
+        );
         unsafe { dp_term_feed(t, b"\x1b[?2026l".as_ptr(), 8) };
         assert_eq!(unsafe { dp_term_synchronized_output(t) }, 0);
         unsafe { dp_term_free(t) };
@@ -1088,8 +1122,8 @@ mod tests {
 
 /// Allocation helpers for hosts without a C allocator — that is, WebAssembly.
 ///
-/// The iOS client passes pointers it got from Swift; a browser has no such
-/// thing, so JS asks the module for a buffer, writes bytes into the module's
+/// JavaScript cannot pass a native buffer directly, so it asks the module for
+/// a buffer, writes bytes into the module's
 /// own linear memory, and hands the offset back. Without these there is no way
 /// to get a single byte of pty output into the emulator from JavaScript.
 ///

@@ -1,10 +1,9 @@
 /**
  * Turning key presses into the bytes a pty expects.
  *
- * A deliberate mirror of the iOS client's `Keys.swift`. The encodings are not
- * a matter of taste — a TUI that has set DECCKM wants `ESC O A` for up and
- * silently ignores `ESC [ A` — so both clients have to make the same choices
- * or the same session behaves differently depending on what you opened it on.
+ * The encodings are not a matter of taste — a TUI that has set DECCKM wants
+ * `ESC O A` for up and silently ignores `ESC [ A` — so they live in one
+ * explicit mapping rather than falling through browser key names.
  */
 
 export type Modes = {

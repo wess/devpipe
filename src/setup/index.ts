@@ -6,6 +6,7 @@ import { currentUser, requireAuth, requireOwner } from "../auth/guard.ts"
 import * as ocean from "../boxes/digitalocean.ts"
 import { forgetGpuSizes, forgetRegionNames } from "../boxes/gpu.ts"
 import { activeProvider } from "../providers/index.ts"
+import { verifyRunpodToken } from "../providers/runpod.ts"
 import { rateLimit } from "../security/ratelimit.ts"
 import {
   CREDENTIAL,
@@ -65,7 +66,7 @@ export const setupState = async (db: Connection) => {
   const people = (await db.one(from("users").select("COUNT(*) AS n"))) as any
   const claimed = Number(people?.n ?? 0) > 0
 
-  const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+  const digitalOceanToken = await getCredential(db, CREDENTIAL.digitalOceanToken)
   const domain = (await getSetting(db, SETTING.domain)).trim()
   const keys = (await getSetting(db, SETTING.sshKeyIds))
     .split(",")
@@ -81,20 +82,28 @@ export const setupState = async (db: Connection) => {
   let domainOnAccount = false
   let account: { email: string; dropletLimit: number } | null = null
   let providerError: string | null = null
-  if (provider.kind === "docker") {
+  let providerConfigured = false
+  if (provider.kind === "docker" || provider.kind === "runpod") {
     try {
-      const configured = await provider.configured(db)
-      if (!configured) providerError = "Docker is not running, or the devpipe-box:local image has not been built."
-      else account = { email: "local Docker", dropletLimit: 0 }
-      domainOnAccount = configured
+      providerConfigured = await provider.configured(db)
+      if (!providerConfigured) {
+        providerError =
+          provider.kind === "docker"
+            ? "Docker is not running, or the devpipe-box:local image has not been built."
+            : "Runpod needs a valid API key and DEVPIPE_RUNPOD_IMAGE pointing at a published Devpipe box image."
+      } else {
+        account = { email: provider.kind === "docker" ? "local Docker" : "Runpod", dropletLimit: 0 }
+      }
+      domainOnAccount = providerConfigured
     } catch (err: any) {
       providerError = String(err?.message ?? err)
     }
-  } else if (token) {
+  } else if (digitalOceanToken) {
     try {
-      const who = await ocean.verifyToken(token)
+      const who = await ocean.verifyToken(digitalOceanToken)
       account = { email: who.email, dropletLimit: who.dropletLimit }
-      if (domain) domainOnAccount = await ocean.hasDomain(token, domain)
+      providerConfigured = true
+      if (domain) domainOnAccount = await ocean.hasDomain(digitalOceanToken, domain)
     } catch (err: any) {
       providerError = String(err?.message ?? err)
     }
@@ -118,28 +127,35 @@ export const setupState = async (db: Connection) => {
     },
     {
       id: "provider",
-      title: provider.kind === "docker" ? "Start local Docker" : "Connect DigitalOcean",
-      done: provider.kind === "docker" ? Boolean(account) && !providerError : Boolean(token) && !providerError,
+      title:
+        provider.kind === "docker"
+          ? "Start local Docker"
+          : provider.kind === "runpod"
+            ? "Connect Runpod"
+            : "Connect DigitalOcean",
+      done: providerConfigured && !providerError,
       required: true,
       detail:
         provider.kind === "docker"
           ? "Docker is running and the local box image is available."
-          : "The token that creates and destroys boxes. It never leaves this instance.",
+          : provider.kind === "runpod"
+            ? "The API key and published box image are both checked before a Pod can be created."
+            : "The token that creates and destroys boxes. It never leaves this instance.",
     },
     {
       id: "domain",
       title: "Point a domain at it",
-      done: provider.kind === "docker" ? true : Boolean(domain) && domainOnAccount,
-      required: provider.kind !== "docker",
+      done: provider.kind !== "digitalocean" ? true : Boolean(domain) && domainOnAccount,
+      required: provider.kind === "digitalocean",
       detail:
-        provider.kind === "docker"
-          ? "Local containers are reached through a loopback endpoint on this host."
+        provider.kind !== "digitalocean"
+          ? "This provider supplies a direct daemon endpoint, so per-box DNS is not required."
           : "Boxes are reached at a name under this domain, and its DNS has to be on the same provider account.",
     },
     {
       id: "keys",
       title: "Add an SSH key",
-      done: provider.kind === "docker" || keys.length > 0,
+      done: provider.kind !== "digitalocean" || keys.length > 0,
       required: false,
       detail: "The only way onto a box that wedges while it is being built.",
     },
@@ -225,6 +241,25 @@ export const setupRoutes = (db: Connection) => {
         const me = currentUser(c)
         const token = String((c.body as any)?.token ?? "").trim()
         if (!token) return json(c, 422, { error: "Paste a token." })
+
+        const provider = activeProvider()
+        if (provider.kind === "runpod") {
+          try {
+            await verifyRunpodToken(token)
+          } catch (err: any) {
+            return json(c, 422, { error: String(err?.message ?? "That Runpod key did not work.") })
+          }
+          await setCredential(db, CREDENTIAL.runpodToken, token)
+          await audit(db, me.id, "provider.connected", "Runpod")
+          return json(c, 200, {
+            ok: true,
+            account: { email: "Runpod", dropletLimit: 0, status: "active" },
+            domains: [],
+          })
+        }
+        if (provider.kind === "docker") {
+          return json(c, 409, { error: "Local Docker does not use an API token." })
+        }
 
         let account: { email: string; dropletLimit: number; status: string }
         try {

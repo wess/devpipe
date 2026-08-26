@@ -17,13 +17,7 @@ import { db, truncateAll } from "./setup.ts"
 const LEGAL = ["terms.html", "privacy.html", "aup.html"]
 
 /**
- * Asylum's pages. Product documentation rather than drafts — they are meant to
- * be found, so they are link-checked but deliberately not held to `noindex`.
- */
-const ASYLUM = ["asylum.html", "asylum-docs.html", "asylum-class.html"]
-
-/**
- * How to run one yourself. Product documentation like Asylum's, and the page
+ * How to run one yourself. Product documentation, and the page
  * every other one now points at — a licence that invites people to self-host
  * with no page saying what that takes is an invitation to open an issue
  * instead.
@@ -31,7 +25,7 @@ const ASYLUM = ["asylum.html", "asylum-docs.html", "asylum-class.html"]
 const SELF_HOST = ["self-host.html"]
 
 /** Every page the link checker knows about. */
-const PAGES = ["index.html", ...LEGAL, ...ASYLUM, ...SELF_HOST]
+const PAGES = ["index.html", ...LEGAL, ...SELF_HOST]
 
 /**
  * Paths the web tier answers with the app shell rather than with a file in
@@ -78,23 +72,15 @@ describe("the pages themselves", () => {
     }
   })
 
-  test("the lander links to the legal pages and to Asylum", async () => {
-    // Not to every Asylum page: the lander carries the entry point, and the
-    // section navigates itself from there. Orphans are caught below instead.
+  test("the lander links to the legal pages", async () => {
     const lander = await read("index.html")
-    for (const name of [...LEGAL, "asylum.html"]) {
+    for (const name of LEGAL) {
       expect(lander, `the lander does not link to ${name}`).toContain(`href="/${name}"`)
     }
   })
 
-  test("no Asylum page is an orphan", async () => {
-    // Each one must be reachable from another, or it exists only for whoever
-    // already knows the URL — which is the same as not existing.
-    const bodies = new Map(await Promise.all(PAGES.map(async n => [n, await read(n)] as const)))
-    for (const name of ASYLUM) {
-      const linkers = [...bodies].filter(([from, body]) => from !== name && body.includes(`href="/${name}"`))
-      expect(linkers.length, `nothing links to ${name}`).toBeGreaterThan(0)
-    }
+  test("the CLI attach path is visible", async () => {
+    expect(await read("index.html")).toContain("devpipe attach &lt;box&gt;")
   })
 
   test("the lander offers a way into the app", async () => {
@@ -102,8 +88,8 @@ describe("the pages themselves", () => {
     // reachable only by knowing the path to type — which was the state of
     // things, and reads as "the product does not exist yet".
     //
-    // It goes to the home path rather than to the terminals. Signing in should
-    // land on the work — the runs — and a terminal is one pane of one box.
+    // It goes to the authenticated workspace rather than to another static
+    // page, so the product is reachable without knowing a path to type.
     expect(await read("index.html")).toContain(`href="${HOME_PATH}"`)
   })
 

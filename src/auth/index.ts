@@ -43,9 +43,8 @@ export const startSession = async (db: Connection, userId: number, conn: any) =>
  * The session, handed over both ways at once.
  *
  * The cookie is what a browser will use, and it cannot read it. The token in the
- * body is what iOS and `dpctl` keep, each in a keychain no web page can reach —
- * so there is nothing to gain by moving them and a working thing to break. The
- * web client simply stops storing what it is given.
+ * body is what the CLI keeps in the system keychain, where no web page can
+ * reach it. The web client simply ignores the string and uses the cookie.
  */
 const withSession = (c: any, status: number, token: string, user: unknown) =>
   json(putHeader(c, "set-cookie", sessionCookie(token)), status, { token, user })

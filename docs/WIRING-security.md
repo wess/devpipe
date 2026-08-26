@@ -52,10 +52,9 @@ the pty daemon off the public interface. `DEVPIPE_INSECURE=1` goes with it and
 is correct *because* of it: the daemon speaks plain HTTP to Caddy over loopback,
 and Caddy terminates TLS.
 
-The certificate is real, from Let's Encrypt over HTTP-01. That is not cosmetic:
-iOS App Transport Security evaluates system trust *before* an app's pinning code
-is consulted, so a self-signed certificate can never be rescued by pinning. See
-[spikes.md](spikes.md).
+The certificate is real, from Let's Encrypt over HTTP-01. Browser websockets and
+the CLI therefore use the operating system's ordinary trust store; there is no
+self-signed exception or pin to distribute.
 
 Authentication to a box is `agent_token`, generated per box in
 `src/boxes/index.ts` and known only to that box and the control plane. It opens
@@ -80,13 +79,11 @@ every token minted against it.
   session create and session delete all still demand the full bearer.
 - It still travels in the websocket query string for the browser, because a
   browser cannot set headers on a handshake, so it still lands in that box's
-  access log. The difference is what is now in that log. iOS and `dpctl` use
-  `URLSession`/`ureq` and send a header, so nothing appears in a URL there.
-- Because it expires, it cannot be fetched once and kept. Both clients mint one
-  per connection attempt — `attachUrl` in `src/web/terminal/session.ts` and
-  `renew` in `ios/Sources/Net/Daemon.swift`. A terminal reconnects when a tab
-  comes back into view or an app returns to the foreground, which is routinely
-  hours after the first token was issued.
+  access log. The difference is what is now in that log. `devpipe` uses `ureq`
+  and sends a header, so nothing appears in a URL there.
+- Because it expires, it cannot be fetched once and kept. The browser mints one
+  per connection attempt in `src/web/terminal/session.ts`; a reconnect after a
+  backgrounded tab may happen hours after the first token was issued.
 - `attach:<session>` scopes to a single session, for a credential handed to
   somebody who is not the owner.
 
@@ -127,12 +124,12 @@ with the key inside.
 
 Not over SSH, and that is the intended answer rather than a consolation.
 
-`dpctl` (`daemon/src/bin/dpctl.rs`) signs in to the control plane once, keeps
+`devpipe` (`daemon/src/bin/devpipe.rs`) signs in to the control plane once, keeps
 the session token in the system keychain, and attaches a local terminal to a box
-over the same authenticated WSS on 443 the web and iOS clients use:
+over the same authenticated WSS on 443 the web app uses:
 
-    dpctl login
-    dpctl connect mybox
+    devpipe login
+    devpipe attach mybox
 
 There is nothing to configure — no key, no `known_hosts`, no flags — because the
 box already has a hostname under `devpipe.com` and a Let's Encrypt certificate
@@ -145,17 +142,17 @@ Two properties worth keeping:
 - The stored credential is `{server, token}` together, not a bare token. They
   are one credential — a token minted by a self-hosted instance is worthless at
   devpipe.com, and sending it there would hand a third party a working session.
-- `dpctl` sets a `User-Agent` of `dpctl/<version> (<hostname>)`, which is what
+- `devpipe` sets a `User-Agent` of `devpipe/<version> (<hostname>)`, which is what
   `startSession` records. A laptop therefore appears by name under Settings →
   Devices and can be signed out from there, so the revocation story is the one
   that already existed rather than a new one.
 
-A box that is asleep is woken and waited for, and `connect` reattaches to a live
+A box that is asleep is woken and waited for, and `attach` reattaches to a live
 session of the same shape rather than starting a new shell — the work outliving
 the connection is the product, and an `ssh`-shaped client that opened a fresh
 shell every time would throw it away.
 
-`dpctl port mybox 3000` is `ssh -L`'s replacement, over the daemon's
+`devpipe port mybox 3000` is `ssh -L`'s replacement, over the daemon's
 `/v1/forward`. The destination is **not a parameter** — it is always
 `127.0.0.1` on the box — and that is the whole security model here. An endpoint
 that forwarded to an arbitrary host would be an open proxy for anyone holding a
@@ -173,7 +170,7 @@ The local end binds loopback, never `0.0.0.0` — a forward bound to every
 interface republishes the box's private port to whatever network the laptop is
 on, which is a coffee shop about half the time.
 
-`dpctl ls / pull / push / edit` move files over `/v1/fs/*` on the same door with
+`devpipe ls / pull / push / edit` move files over `/v1/fs/*` on the same door with
 the same bearer, rather than reopening SSH — which a box locks down on purpose
 (`DisableForwarding yes`) and whose host key changes on every wake, because
 waking builds a new machine.
@@ -184,7 +181,7 @@ shell as `devpipe`, who has passwordless sudo by design, so root is one word
 away — and a restriction would stop nothing an attacker could not do
 in one more request, while breaking the legitimate case of reading a config
 outside the home directory. The credential is the boundary, and it never leaves
-the control plane on the web path or the client's keychain on the `dpctl` path.
+the control plane on the web path or the client's keychain on the `devpipe` path.
 
 Two asymmetries, both deliberate:
 
@@ -208,7 +205,7 @@ covering both architectures, so an Intel Mac is not a separate instruction;
 Linux x86-64 comes out of the same container as the box binaries. The macOS
 build is ad-hoc signed — enough that Gatekeeper does not refuse a downloaded
 binary outright, **not notarised**, which is a real gap and its own piece of
-work. Windows and Linux ARM are built by `.github/workflows/dpctl.yml`.
+work. Windows and Linux ARM are built by `.github/workflows/devpipe.yml`.
 
 Still to build on this channel: file transfer. It rides the same socket and
 needs no new inbound port.
@@ -324,9 +321,9 @@ column are not left that way: `requireAuth` derives the class from the
 client that actually made it rather than to whoever presents it next — which
 would hand the binding to whichever party got there first.
 
-iOS and `dpctl` keep sending `Authorization: Bearer`. Each holds its token in a
-keychain no web page can reach, so there is nothing to gain by moving them and a
-working thing to break. `requireAuth` takes either, header first.
+`devpipe` keeps sending `Authorization: Bearer` and holds its token in a system
+keychain no web page can reach. `requireAuth` takes either bearer or cookie,
+with the explicit header first.
 
 **`SameSite` is not the CSRF defence here, and cannot be.** Boxes and previews
 live at `*.devpipe.com`, which is the same *site* as the app: a preview serving

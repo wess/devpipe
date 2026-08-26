@@ -62,7 +62,10 @@ fn input_reaches_the_child() {
         &[(300, b"echo $((6*7))-ran\n")],
         Duration::from_secs(3),
     );
-    assert!(out.contains("42-ran"), "child never ran the command; saw:\n{out}");
+    assert!(
+        out.contains("42-ran"),
+        "child never ran the command; saw:\n{out}"
+    );
 }
 
 /// And the one that matters: 0x03 must signal, not just echo.

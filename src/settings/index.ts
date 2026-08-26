@@ -166,7 +166,7 @@ const DEFAULTS: Record<string, string> = {
   [SETTING.spendWarnPct]: "80",
   [SETTING.setupComplete]: "0",
   [SETTING.daemonUrl]: "https://devpipe.com/dist/devpiped",
-  [SETTING.cliUrl]: "https://devpipe.com/dist/devpipe",
+  [SETTING.cliUrl]: "https://devpipe.com/dist/devpipe-vault",
   [SETTING.sshKeyIds]: "",
   [SETTING.sshSources]: "",
 }
@@ -233,6 +233,7 @@ export const credentialsSealed = (): boolean => secretsAvailable()
 
 export const CREDENTIAL = {
   digitalOceanToken: "digitalocean_token",
+  runpodToken: "runpod_token",
 } as const
 
 export const getCredential = async (db: Connection, key: string): Promise<string | null> => {

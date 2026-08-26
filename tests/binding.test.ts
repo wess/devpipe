@@ -17,12 +17,12 @@ const CHROME_MAC =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 const CHROME_MAC_NEWER =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-const IOS_APP = "Devpipe/1 CFNetwork/3860.600.12 Darwin/24.6.0"
+const DEVPIPE_CLI = "devpipe/0.1.0 (workstation) Darwin/24.6.0"
 
 describe("what a client is called", () => {
   test("the program and the machine, without versions", () => {
     expect(agentClass(CHROME_MAC)).toBe("Chrome/Mac")
-    expect(agentClass(IOS_APP)).toBe("Devpipe/Mac")
+    expect(agentClass(DEVPIPE_CLI)).toBe("Devpipe/Mac")
     expect(agentClass("curl/8.7.1")).toBe("curl/")
   })
 
@@ -37,7 +37,7 @@ describe("what a client is called", () => {
 
   test("but a different program does", () => {
     expect(agentClass(CHROME_MAC)).not.toBe(agentClass("curl/8.7.1"))
-    expect(agentClass(CHROME_MAC)).not.toBe(agentClass(IOS_APP))
+    expect(agentClass(CHROME_MAC)).not.toBe(agentClass(DEVPIPE_CLI))
   })
 
   /** Chrome says "Safari" in its agent, and Edge says "Chrome". */
@@ -56,6 +56,10 @@ describe("what a client is called", () => {
     expect(agentClass("")).toBe("")
     expect(agentClass(null)).toBe("")
     expect(sameClient("", "Chrome/Mac")).toBe(true)
+  })
+
+  test("the renamed CLI keeps its existing session binding", () => {
+    expect(sameClient("dpctl/Mac", "Devpipe/Mac")).toBe(true)
   })
 })
 
@@ -184,7 +188,7 @@ describe("the device list", () => {
       return raw
     }
     mine = await make(CHROME_MAC)
-    await make(IOS_APP)
+    await make(DEVPIPE_CLI)
     fetchApp = router(...sessionRoutes(db)) as any
   })
 

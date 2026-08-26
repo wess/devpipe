@@ -4,6 +4,9 @@ import { del, get, json, parseJson, patch, pipeline, post } from "@atlas/server"
 import { currentUser, requireAdmin, requireAuth, requireOwner } from "../auth/guard.ts"
 import { asRole, isRole, ROLES } from "../auth/roles.ts"
 import * as ocean from "../boxes/digitalocean.ts"
+import { activeProvider } from "../providers/index.ts"
+import { verifyRunpodToken } from "../providers/runpod.ts"
+import type { ProviderKind } from "../providers/types.ts"
 import { suspendUser } from "../security/abuse.ts"
 import {
   allSettings,
@@ -38,6 +41,12 @@ export const adminRoutes = (db: Connection) => {
   const admin = pipeline(requireAuth({ db }), requireAdmin())
   const adminJson = pipeline(requireAuth({ db }), requireAdmin(), parseJson)
 
+  const credentialKey = (kind: ProviderKind) => {
+    if (kind === "digitalocean") return CREDENTIAL.digitalOceanToken
+    if (kind === "runpod") return CREDENTIAL.runpodToken
+    return null
+  }
+
   return [
     get(
       "/admin/overview",
@@ -56,13 +65,14 @@ export const adminRoutes = (db: Connection) => {
             .select("COUNT(*) AS n"),
         )
 
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+        const provider = activeProvider()
+        const configured = await provider.configured(db)
         let spend = 0
         let providerError: string | null = null
-        if (token) {
+        if (configured) {
           try {
-            const droplets = await ocean.listDroplets(token)
-            spend = droplets.reduce((sum, d) => sum + d.monthly, 0)
+            const machines = await provider.compute.listManaged(db)
+            spend = machines.reduce((sum, machine) => sum + machine.monthly, 0)
           } catch (err: any) {
             providerError = String(err?.message ?? err)
           }
@@ -74,7 +84,8 @@ export const adminRoutes = (db: Connection) => {
           waitlist,
           suspended,
           monthly_spend: spend,
-          provider_configured: Boolean(token),
+          provider: provider.label,
+          provider_configured: configured,
           provider_error: providerError,
         })
       }),
@@ -244,11 +255,27 @@ export const adminRoutes = (db: Connection) => {
         // Read for the hint, and only the owner is shown it. An admin needs to
         // know whether a provider is connected — half the screens are useless
         // otherwise — and has no business knowing which token it is.
-        const token = await getCredential(db, CREDENTIAL.digitalOceanToken)
+        const provider = activeProvider()
+        const key = credentialKey(provider.kind)
+        const token = key ? await getCredential(db, key) : null
         return json(c, 200, {
           settings,
           can_edit: me.role === "owner",
-          provider: { digitalocean: me.role === "owner" ? credentialHint(token) : token ? "connected" : null },
+          provider: {
+            kind: provider.kind,
+            label: provider.label,
+            credential: me.role === "owner" ? credentialHint(token) : token ? "connected" : null,
+            configured: await provider.configured(db),
+            // Kept for older web clients during the CLI/provider transition.
+            digitalocean:
+              provider.kind === "digitalocean"
+                ? me.role === "owner"
+                  ? credentialHint(token)
+                  : token
+                    ? "connected"
+                    : null
+                : null,
+          },
           // Said rather than assumed. Without DEVPIPE_SECRET_KEY the provider
           // token is stored as typed, and a screen that showed no difference
           // would be implying a protection this instance does not have.
@@ -267,6 +294,68 @@ export const adminRoutes = (db: Connection) => {
         }
         await audit(db, me.id, "settings.changed", Object.keys(b).join(","))
         return json(c, 200, await allSettings(db))
+      }),
+    ),
+
+    post(
+      "/admin/provider",
+      ownerJson(async c => {
+        const me = currentUser(c)
+        const provider = activeProvider()
+        if (provider.kind === "docker") {
+          return json(c, 409, { error: "Local Docker is configured on the host and does not use an API token." })
+        }
+
+        const token = String((c.body as any).token ?? "").trim()
+        if (!token) return json(c, 422, { error: "Paste a token." })
+        try {
+          let account = provider.label
+          if (provider.kind === "runpod") {
+            await verifyRunpodToken(token)
+            await setCredential(db, CREDENTIAL.runpodToken, token)
+          } else {
+            const verified = await ocean.verifyToken(token)
+            account = verified.email
+            await setCredential(db, CREDENTIAL.digitalOceanToken, token)
+          }
+          await audit(db, me.id, "provider.connected", `${provider.label}: ${account}`)
+          return json(c, 200, { ok: true, account: { label: account } })
+        } catch (err: any) {
+          return json(c, 422, { error: String(err?.message ?? `That ${provider.label} credential did not work.`) })
+        }
+      }),
+    ),
+
+    del(
+      "/admin/provider",
+      owner(async c => {
+        const me = currentUser(c)
+        const provider = activeProvider()
+        const key = credentialKey(provider.kind)
+        if (!key) return json(c, 409, { error: "Local Docker does not have a stored provider credential." })
+
+        const liveBoxes = (await db.one(
+          from("boxes")
+            .where(q => q("provider").equals(provider.kind))
+            .where(q => q("provider_id").isNotNull())
+            .where(q => q("destroyed_at").isNull())
+            .select("COUNT(*) AS n"),
+        )) as any
+        const liveWorkspaces = (await db.one(
+          from("workspaces")
+            .where(q => q("provider").equals(provider.kind))
+            .where(q => q("deleted_at").isNull())
+            .select("COUNT(*) AS n"),
+        )) as any
+        const resources = Number(liveBoxes?.n ?? 0) + Number(liveWorkspaces?.n ?? 0)
+        if (resources > 0) {
+          return json(c, 409, {
+            error: `${provider.label} still has ${resources} managed resource${resources === 1 ? "" : "s"}. Destroy them before disconnecting the credential needed to clean them up.`,
+          })
+        }
+        await clearCredential(db, key)
+        await audit(db, me.id, "provider.disconnected", provider.label)
+        return json(c, 200, { ok: true })
       }),
     ),
 

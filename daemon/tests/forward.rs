@@ -152,7 +152,7 @@ async fn many_connections_do_not_share_a_tunnel() {
     assert_eq!(b.into_data()[..], b"echo:two"[..]);
 }
 
-/// The bare-shell case that `dpctl connect` reattaches on.
+/// The bare-shell case that `devpipe attach` reattaches on.
 ///
 /// A session created with an empty argv is reported back with the shell the
 /// daemon resolved — `[]` in, `["/bin/zsh"]` out. Comparing those literally is
@@ -171,8 +171,15 @@ async fn a_bare_shell_is_listed_with_a_resolved_argv() {
 
     let listed = get(&format!("http://127.0.0.1:{port}/v1/sessions")).await;
     let argv = listed[0]["argv"].as_array().unwrap();
-    assert!(!argv.is_empty(), "an empty argv came back empty; the match in dpctl assumes otherwise");
-    assert_eq!(argv.len(), 1, "a login shell is one entry, which is what dpctl matches on");
+    assert!(
+        !argv.is_empty(),
+        "an empty argv came back empty; the match in devpipe assumes otherwise"
+    );
+    assert_eq!(
+        argv.len(),
+        1,
+        "a login shell is one entry, which is what devpipe matches on"
+    );
 }
 
 async fn post(url: &str, body: &serde_json::Value) -> serde_json::Value {

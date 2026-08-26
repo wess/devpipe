@@ -1,10 +1,8 @@
 /**
  * Resolves the colour tags the emulator emits into actual RGB.
  *
- * A deliberate copy of the iOS client's `Palette.swift`, down to the values.
  * The core ships `Default` / `Indexed` / `Rgb` rather than baking a theme in,
- * so each client decides what those mean — and the two clients have to decide
- * the same thing or the same session looks like two different products.
+ * so the web renderer owns the actual palette.
  */
 
 export const BACKGROUND = "#12141a"

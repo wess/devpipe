@@ -28,7 +28,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Computed, not a literal: asserting on a string the client typed would
     // match the shell echoing it back while still blocked in `sleep`.
-    ws.send(Message::Binary("echo $((6*7))-alive\n".into())).await?;
+    ws.send(Message::Binary("echo $((6*7))-alive\n".into()))
+        .await?;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     let mut acc = String::new();
@@ -43,7 +44,11 @@ async fn main() -> anyhow::Result<()> {
     println!("{acc}");
     println!(
         "\n=== interrupt {} ===",
-        if acc.contains("42-alive") { "WORKED" } else { "DID NOT FIRE" }
+        if acc.contains("42-alive") {
+            "WORKED"
+        } else {
+            "DID NOT FIRE"
+        }
     );
     Ok(())
 }
@@ -53,9 +58,7 @@ async fn main() -> anyhow::Result<()> {
 async fn connect(
     url: &str,
 ) -> anyhow::Result<(
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
     #[derive(Debug)]
@@ -98,13 +101,6 @@ async fn connect(
         .dangerous()
         .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
         .with_no_client_auth();
-    let connector =
-        tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config));
-    Ok(tokio_tungstenite::connect_async_tls_with_config(
-        url,
-        None,
-        false,
-        Some(connector),
-    )
-    .await?)
+    let connector = tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config));
+    Ok(tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector)).await?)
 }

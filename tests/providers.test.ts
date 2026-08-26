@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { dockerProvider } from "../src/providers/docker.ts"
 import { digitalOceanProvider } from "../src/providers/digitalocean.ts"
 import { providerFor } from "../src/providers/index.ts"
+import { runpodProvider } from "../src/providers/runpod.ts"
 import { db } from "./setup.ts"
 
 const machineInspect = (id = "container-1") =>
@@ -19,14 +20,91 @@ const machineInspect = (id = "container-1") =>
 
 describe("machine provider contracts", () => {
   test("every registered backend owns compute lifecycle semantics", () => {
-    for (const provider of [providerFor("digitalocean"), providerFor("docker")]) {
+    for (const provider of [providerFor("digitalocean"), providerFor("runpod"), providerFor("docker")]) {
       expect(provider.compute.create).toBeFunction()
       expect(provider.compute.inspect).toBeFunction()
       expect(provider.compute.findByOperation).toBeFunction()
       expect(provider.compute.release).toBeFunction()
     }
     expect(digitalOceanProvider.capabilities.externalFirewall).toBe(true)
+    expect(providerFor("runpod").capabilities.publicDns).toBe(false)
     expect(providerFor("docker").capabilities.externalFirewall).toBe(false)
+  })
+
+  test("Runpod creates a managed CPU Pod on the shared image and exposes the daemon proxy", async () => {
+    const calls: { path: string; method: string; body: any }[] = []
+    const fetcher = (async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = new URL(String(input))
+      const method = init.method ?? "GET"
+      const body = init.body ? JSON.parse(String(init.body)) : null
+      calls.push({ path: `${url.pathname}${url.search}`, method, body })
+      if (url.pathname === "/v1/pods" && method === "POST") {
+        return Response.json({
+          id: "pod-1",
+          name: body.name,
+          desiredStatus: "RUNNING",
+          env: body.env,
+          cpuFlavorId: "cpu3c",
+          vcpuCount: 2,
+          memoryInGb: 4,
+          costPerHr: "0.12",
+          networkVolume: { id: "vol-1" },
+        })
+      }
+      if (url.pathname === "/v1/pods/pod-1" && method === "DELETE") return new Response(null, { status: 204 })
+      throw new Error(`unexpected Runpod request: ${method} ${url}`)
+    }) as unknown as typeof fetch
+    const provider = runpodProvider({
+      fetch: fetcher,
+      apiKey: "rpa_test",
+      image: "registry.example/devpipe-box:test",
+      regions: ["US-GA-1"],
+    })
+    const created = await provider.compute.create(db, {
+      operationId: "op-22",
+      name: "alfa-box",
+      region: "US-GA-1",
+      size: "cpu3c-2-4",
+      userData: "ignored by the managed image",
+      agentToken: "box-secret",
+      workspace: { id: "vol-1", name: "main", region: "US-GA-1", sizeGb: 20, machineIds: [] },
+    })
+    expect(created.endpoint).toBe("https://pod-1-7788.proxy.runpod.net")
+    expect(created.monthly).toBeCloseTo(87.6)
+    const create = calls[0]
+    expect(create.body.imageName).toBe("registry.example/devpipe-box:test")
+    expect(create.body.computeType).toBe("CPU")
+    expect(create.body.networkVolumeId).toBe("vol-1")
+    expect(create.body.env.DEVPIPE_OPERATION_ID).toBe("op-22")
+    expect(create.body.ports).toEqual(["7788/http"])
+
+    await provider.compute.release(db, {
+      machineId: created.id,
+      workspaceId: "vol-1",
+      preserveWorkspace: true,
+    })
+    expect(calls.at(-1)).toMatchObject({ path: "/v1/pods/pod-1", method: "DELETE" })
+  })
+
+  test("Runpod recovers a Pod by the durable operation marker", async () => {
+    const fetcher = (async () =>
+      Response.json([
+        {
+          id: "pod-9",
+          desiredStatus: "RUNNING",
+          env: {
+            DEVPIPE_MANAGED: "true",
+            DEVPIPE_OPERATION_ID: "op-9",
+            DEVPIPE_SIZE: "cpu3c-4-8",
+            DEVPIPE_REGION: "EU-RO-1",
+          },
+        },
+      ])) as unknown as typeof fetch
+    const found = await runpodProvider({ fetch: fetcher, apiKey: "rpa_test", image: "devpipe:test" }).compute
+      .findByOperation(db, "op-9")
+    expect(found?.id).toBe("pod-9")
+    expect(found?.size).toBe("cpu3c-4-8")
+    expect(found?.endpoint).toBe("https://pod-9-7788.proxy.runpod.net")
   })
 
   test("Docker creates a constrained daemon container and preserves its named workspace", async () => {

@@ -9,9 +9,8 @@
  * XSS into a full compromise. A credential JavaScript cannot read fails safe
  * instead.
  *
- * Other clients keep sending `Authorization: Bearer`. iOS holds its token in the
- * keychain and `dpctl` in the macOS keychain, neither of which a web page can
- * reach, so nothing is gained by moving them and a working thing would break.
+ * The CLI keeps sending `Authorization: Bearer` and holds its token in the
+ * system keychain, where no web page can reach it.
  *
  * **`SameSite` is not the CSRF defence here, and cannot be.** Boxes and previews
  * live at `*.devpipe.com`, which is the same *site* as the app — so a preview

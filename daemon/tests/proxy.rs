@@ -63,7 +63,10 @@ async fn dev_server() -> u16 {
                     return;
                 }
 
-                let body = format!("{first}\n{host}\n{}", raw.split("\r\n\r\n").nth(1).unwrap_or(""));
+                let body = format!(
+                    "{first}\n{host}\n{}",
+                    raw.split("\r\n\r\n").nth(1).unwrap_or("")
+                );
                 let _ = socket
                     .write_all(
                         format!(
@@ -82,7 +85,9 @@ async fn dev_server() -> u16 {
 
 /// One request, and everything the box said back — status line included.
 async fn through(daemon_port: u16, request: &str) -> String {
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", daemon_port)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", daemon_port))
+        .await
+        .unwrap();
     socket.write_all(request.as_bytes()).await.unwrap();
     let mut raw = String::new();
     socket.read_to_string(&mut raw).await.unwrap();
@@ -102,7 +107,10 @@ async fn a_page_comes_back_with_its_path_and_query_intact() {
     )
     .await;
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
-    assert!(answer.contains("GET /assets/app.js?v=3 HTTP/1.1"), "{answer}");
+    assert!(
+        answer.contains("GET /assets/app.js?v=3 HTTP/1.1"),
+        "{answer}"
+    );
 }
 
 #[tokio::test]
@@ -123,7 +131,12 @@ async fn the_dev_server_is_told_it_is_being_asked_on_loopback() {
     .await;
     // Lowercased on the way out: hyper normalises header names, and the dev
     // server echoes back what it actually received.
-    assert!(answer.to_lowercase().contains(&format!("host: 127.0.0.1:{app}")), "{answer}");
+    assert!(
+        answer
+            .to_lowercase()
+            .contains(&format!("host: 127.0.0.1:{app}")),
+        "{answer}"
+    );
     assert!(!answer.contains("p-abc.devpipe.com"), "{answer}");
 }
 
@@ -182,7 +195,9 @@ async fn a_websocket_upgrade_passes_through() {
     let daemon_port = daemon().await;
     let app = dev_server().await;
 
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", daemon_port)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", daemon_port))
+        .await
+        .unwrap();
     socket
         .write_all(
             format!(
@@ -209,9 +224,12 @@ async fn a_websocket_upgrade_passes_through() {
     // directions, which is what a splice has to prove.
     socket.write_all(b"ping").await.unwrap();
     let mut back = vec![0u8; 9];
-    tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_exact(&mut back))
-        .await
-        .expect("the upgraded connection went quiet")
-        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        socket.read_exact(&mut back),
+    )
+    .await
+    .expect("the upgraded connection went quiet")
+    .unwrap();
     assert_eq!(&back, b"pong:ping");
 }

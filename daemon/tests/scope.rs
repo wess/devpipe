@@ -20,7 +20,9 @@ async fn daemon() -> u16 {
 
 /// The status line of one request, which is all these assert on.
 async fn status(port: u16, head: &str) -> String {
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
     socket.write_all(head.as_bytes()).await.unwrap();
     // Bounded: a refused websocket upgrade is answered and then the connection
     // is simply left open, so reading to EOF here waits forever. The status
@@ -30,7 +32,11 @@ async fn status(port: u16, head: &str) -> String {
         .await
         .expect("no answer within five seconds")
         .unwrap_or(0);
-    String::from_utf8_lossy(&raw[..n]).lines().next().unwrap_or("").to_string()
+    String::from_utf8_lossy(&raw[..n])
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 async fn create_session(port: u16) -> String {
@@ -40,7 +46,9 @@ async fn create_session(port: u16) -> String {
          Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
     socket.write_all(head.as_bytes()).await.unwrap();
     let mut raw = Vec::new();
     let _ = socket.read_to_end(&mut raw).await;
@@ -57,7 +65,9 @@ async fn a_scoped_token_attaches_to_a_terminal() {
     let scoped = devpiped::scope::sign(TOKEN, devpiped::scope::ATTACH, 120);
 
     let url = format!("ws://127.0.0.1:{port}/v1/sessions/{id}/attach?token={scoped}");
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("scoped token refused");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("scoped token refused");
 
     // The hello frame proves it is really attached rather than merely upgraded.
     let first = ws.next().await.unwrap().unwrap();
@@ -163,7 +173,8 @@ async fn a_session_scoped_token_does_not_open_a_sibling() {
 #[tokio::test]
 async fn the_box_token_still_opens_everything() {
     let port = daemon().await;
-    let head =
-        format!("GET /v1/sessions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\nConnection: close\r\n\r\n");
+    let head = format!(
+        "GET /v1/sessions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\nConnection: close\r\n\r\n"
+    );
     assert!(status(port, &head).await.contains("200"));
 }

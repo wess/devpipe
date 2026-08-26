@@ -72,12 +72,22 @@ are not installed by this backend yet.
 
 ## Runpod
 
-Runpod is planned, not enabled in this release. Its adapter should use the same
-compute contract but an OCI runtime payload and outbound control-plane tunnel.
-Network volumes are location-bound and chosen at Pod creation, and public proxy
-or TCP endpoints do not have the same lifecycle as per-box DigitalOcean DNS.
-Those differences belong in the adapter and its capabilities, not in box routes.
+Runpod uses the REST Pod API and the same OCI image as the Docker backend. Push
+that image to a registry Runpod can read, then configure the API process:
 
-The acceptance bar is the shared lifecycle suite: create, find by operation,
-connect, preserve workspace, release, recover after interruption, and reconcile
-provider resources in both directions.
+```sh
+docker build -f deploy/docker/box.Dockerfile -t registry.example/devpipe-box:latest .
+docker push registry.example/devpipe-box:latest
+
+export DEVPIPE_MACHINE_PROVIDER=runpod
+export DEVPIPE_RUNPOD_IMAGE=registry.example/devpipe-box:latest
+export RUNPOD_API_KEY=... # or connect it in the first-run wizard
+export DEVPIPE_RUNPOD_REGIONS=US-GA-1,EU-RO-1 # optional
+```
+
+Runpod Pods expose the daemon through Runpod's trusted HTTPS proxy. Network
+volumes are location-bound and selected when a Pod is created, so the adapter
+creates a new Pod against the existing volume when a sleeping box wakes and
+terminates the Pod when compute is released. No per-box DNS or provider
+firewall is claimed. The stock image guarantees the daemon and baseline shell
+tools; publish a derived image when the Runpod catalogue should advertise more.

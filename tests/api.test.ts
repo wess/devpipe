@@ -170,7 +170,7 @@ describe("accounts", () => {
     expect(data.error).toContain("provider")
   })
 
-  test("the wizard catalog is served so web and iOS cannot drift", async () => {
+  test("the wizard catalog is served so provisioning and the web UI cannot drift", async () => {
     const { data } = await call("GET", "/boxes/catalog", undefined, ownerToken)
     expect(data.tools.length).toBeGreaterThan(5)
     expect(data.sizes[0].slug).toBe("s-1vcpu-512mb-10gb")

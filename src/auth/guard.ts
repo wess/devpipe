@@ -34,7 +34,7 @@ export const currentUser = (c: any): AuthUser => c.assigns.auth as AuthUser
  * sweep, because a sweep that has not run yet is not a reason to honour a
  * dead session.
  *
- * The header is tried first. It is what iOS and `dpctl` send, it is explicit,
+ * The header is tried first. It is what the CLI sends, it is explicit,
  * and a client that sends one is saying which credential it means.
  *
  * **Cookie-authenticated requests are origin-checked and header ones are not.**

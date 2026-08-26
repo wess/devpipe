@@ -106,5 +106,5 @@ box is destroyed. See `src/shares/retire.ts`.
   `X-Robots-Tag: noindex`, and every preview is attached to an account and shows
   up in the audit log as `preview.created`. Worth revisiting if this instance
   ever has users it does not know.
-- Nothing on iOS opens a preview or a share yet. Both are URLs, so the phone can
-  open them in Safari; neither has a screen in the app.
+- Preview and share management currently lives in the web app. The URLs remain
+  ordinary browser links on any device.

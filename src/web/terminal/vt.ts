@@ -1,10 +1,9 @@
 /**
  * The browser's binding to sinclair's terminal emulator.
  *
- * This is the same Rust crate the iPad app links against, compiled to
- * WebAssembly instead of arm64. Web and iOS therefore agree on what a byte
- * stream means — cursor movement, wide characters, scroll regions, colour —
- * because there is one implementation, not two that were made to look alike.
+ * The Rust core is compiled to WebAssembly so byte-stream semantics — cursor
+ * movement, wide characters, scroll regions, colour — stay out of ad hoc
+ * JavaScript state.
  */
 
 export type Cell = {
@@ -64,7 +63,7 @@ let wasm: Exports | null = null
 export const loadVt = async (source: string | BufferSource = "/vt.wasm"): Promise<void> => {
   if (wasm) return
   // Accepts bytes as well as a URL so the module can be exercised outside a
-  // browser — the emulator is the piece both clients depend on, and a test
+  // browser — the emulator is the piece the renderer depends on, and a test
   // that cannot load it is a test that cannot check it.
   const result =
     typeof source === "string"

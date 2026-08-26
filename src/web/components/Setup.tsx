@@ -47,10 +47,10 @@ export const Setup: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     void refresh()
   }, [refresh])
 
-  // Only once a provider is connected — both of these ask it questions.
+  // Only DigitalOcean has account SSH keys to choose here.
   const providerDone = state?.steps.find(s => s.id === "provider")?.done ?? false
   useEffect(() => {
-    if (!providerDone) return
+    if (!providerDone || state?.provider !== "digitalocean") return
     void api
       .setupSshKeys()
       .then(out => {
@@ -58,7 +58,7 @@ export const Setup: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         setChosenKeys(new Set(out.chosen.map(Number)))
       })
       .catch(() => {})
-  }, [providerDone])
+  }, [providerDone, state?.provider])
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -114,9 +114,9 @@ export const Setup: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         ) : (
           <>
             <p className="note warn">
-              <AlertTriangle size={14} /> Right now the DigitalOcean token below will be stored as readable text. A copy
-              of the database — a backup, a dump, a snapshot — is a copy of a credential that can destroy every box on
-              the account.
+              <AlertTriangle size={14} /> Right now the provider credential below will be stored as readable text. A
+              copy of the database — a backup, a dump, a snapshot — is a copy of a credential that can create and
+              destroy machines on the account.
             </p>
             {secret ? (
               <>
@@ -143,113 +143,135 @@ export const Setup: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         <Head id="provider" />
         {state.account ? (
           <p className="note ok">
-            Connected to {state.account.email} — {state.account.dropletLimit} droplets allowed on this account.
+            Connected to {state.account.email}
+            {state.provider === "digitalocean"
+              ? ` — ${state.account.dropletLimit} droplets allowed on this account.`
+              : "."}
           </p>
         ) : null}
         {state.provider_error && <p className="note bad">{state.provider_error}</p>}
-        <div className="wizard-inline">
-          <label className="field">
-            <span>{state.account ? "Replace the token" : "Personal access token, read and write"}</span>
-            <input
-              type="password"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              placeholder="dop_v1_…"
-              autoComplete="off"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={busy || !token.trim()}
-            onClick={() =>
-              void run(async () => {
-                const out = await api.setupProvider(token.trim())
-                setToken("")
-                setDomains(out.domains)
-                if (!domain && out.domains.length === 1) setDomain(out.domains[0] as string)
-              })
-            }
-          >
-            {busy ? "Checking…" : "Connect"}
-          </button>
-        </div>
-        <p className="muted small">
-          Made under API → Tokens in the DigitalOcean console. It is checked here before it is stored, so a token that
-          does not work is refused now rather than at the first box.
-        </p>
-      </section>
-
-      <section className="card">
-        <Head id="domain" />
-        {domains.length > 0 && !done("domain") && (
-          <div className="choice-grid">
-            {domains.map(d => (
-              <button
-                type="button"
-                key={d}
-                className={`choice ${domain === d ? "on" : ""}`}
-                onClick={() => setDomain(d)}
-              >
-                <strong>{d}</strong>
-                <span className="muted small">On this account</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="wizard-inline">
-          <label className="field">
-            <span>Domain</span>
-            <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="devpipe.example" />
-          </label>
-          <button
-            type="button"
-            disabled={busy || !domain.trim() || !providerDone}
-            onClick={() => void run(() => api.setupDomain(domain.trim()))}
-          >
-            {busy ? "Checking…" : "Use this domain"}
-          </button>
-        </div>
-        <p className="muted small">
-          Its DNS has to be on the same DigitalOcean account, because that is where each box's record is written. A
-          domain pointed anywhere else builds boxes that come up perfectly, never resolve and never get a certificate —
-          so this is checked against the provider rather than taken on trust.
-        </p>
-      </section>
-
-      <section className="card">
-        <Head id="keys" />
-        {keys.length === 0 ? (
+        {state.provider === "docker" ? (
           <p className="muted small">
-            {providerDone
-              ? "This account has no SSH keys. Add one in the DigitalOcean console and reload."
-              : "Connect a provider first."}
+            Build <code>devpipe-box:local</code> and keep Docker running on this host. No provider credential is stored.
           </p>
         ) : (
           <>
-            <div className="choice-grid">
-              {keys.map(k => (
-                <button
-                  type="button"
-                  key={k.id}
-                  className={`choice ${chosenKeys.has(k.id) ? "on" : ""}`}
-                  onClick={() => {
-                    const next = new Set(chosenKeys)
-                    if (next.has(k.id)) next.delete(k.id)
-                    else next.add(k.id)
-                    setChosenKeys(next)
-                  }}
-                >
-                  <strong>{k.name}</strong>
-                  {chosenKeys.has(k.id) && <span className="muted small">On every new box</span>}
-                </button>
-              ))}
+            <div className="wizard-inline">
+              <label className="field">
+                <span>{state.account ? "Replace the credential" : "API credential"}</span>
+                <input
+                  type="password"
+                  value={token}
+                  onChange={e => setToken(e.target.value)}
+                  placeholder={state.provider === "runpod" ? "Runpod API key" : "dop_v1_…"}
+                  autoComplete="off"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={busy || !token.trim()}
+                onClick={() =>
+                  void run(async () => {
+                    const out = await api.setupProvider(token.trim())
+                    setToken("")
+                    setDomains(out.domains)
+                    if (!domain && out.domains.length === 1) setDomain(out.domains[0] as string)
+                  })
+                }
+              >
+                {busy ? "Checking…" : "Connect"}
+              </button>
             </div>
-            <button type="button" disabled={busy} onClick={() => void run(() => api.saveSetupSshKeys([...chosenKeys]))}>
-              Save keys
-            </button>
+            <p className="muted small">
+              {state.provider === "runpod"
+                ? "Create the key in Runpod Settings. The adapter also requires DEVPIPE_RUNPOD_IMAGE on the server."
+                : "Made under API → Tokens in the DigitalOcean console, with read and write access."}{" "}
+              It is checked before it is stored, so a credential that does not work is refused now rather than at the
+              first box.
+            </p>
           </>
         )}
       </section>
+
+      {state.provider === "digitalocean" && (
+        <section className="card">
+          <Head id="domain" />
+          {domains.length > 0 && !done("domain") && (
+            <div className="choice-grid">
+              {domains.map(d => (
+                <button
+                  type="button"
+                  key={d}
+                  className={`choice ${domain === d ? "on" : ""}`}
+                  onClick={() => setDomain(d)}
+                >
+                  <strong>{d}</strong>
+                  <span className="muted small">On this account</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="wizard-inline">
+            <label className="field">
+              <span>Domain</span>
+              <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="devpipe.example" />
+            </label>
+            <button
+              type="button"
+              disabled={busy || !domain.trim() || !providerDone}
+              onClick={() => void run(() => api.setupDomain(domain.trim()))}
+            >
+              {busy ? "Checking…" : "Use this domain"}
+            </button>
+          </div>
+          <p className="muted small">
+            Its DNS has to be on the same DigitalOcean account, because that is where each box's record is written. A
+            domain pointed anywhere else builds boxes that come up perfectly, never resolve and never get a certificate
+            — so this is checked against the provider rather than taken on trust.
+          </p>
+        </section>
+      )}
+
+      {state.provider === "digitalocean" && (
+        <section className="card">
+          <Head id="keys" />
+          {keys.length === 0 ? (
+            <p className="muted small">
+              {providerDone
+                ? "This account has no SSH keys. Add one in the DigitalOcean console and reload."
+                : "Connect a provider first."}
+            </p>
+          ) : (
+            <>
+              <div className="choice-grid">
+                {keys.map(k => (
+                  <button
+                    type="button"
+                    key={k.id}
+                    className={`choice ${chosenKeys.has(k.id) ? "on" : ""}`}
+                    onClick={() => {
+                      const next = new Set(chosenKeys)
+                      if (next.has(k.id)) next.delete(k.id)
+                      else next.add(k.id)
+                      setChosenKeys(next)
+                    }}
+                  >
+                    <strong>{k.name}</strong>
+                    {chosenKeys.has(k.id) && <span className="muted small">On every new box</span>}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void run(() => api.saveSetupSshKeys([...chosenKeys]))}
+              >
+                Save keys
+              </button>
+            </>
+          )}
+        </section>
+      )}
 
       <section className="card">
         <Head id="cap" />

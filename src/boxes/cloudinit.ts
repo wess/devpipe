@@ -14,11 +14,9 @@ import { resolve } from "./catalog.ts"
  * and when something fails the last thing it printed is already on screen.
  *
  * Caddy sits in front of the daemon and gets a real Let's Encrypt certificate
- * for the box's own hostname. That is not decoration: iOS App Transport
- * Security evaluates system trust *before* an app's pinning code is consulted
- * and cancels the connection when it fails, so a self-signed certificate can
- * never be rescued by pinning. A CA-issued certificate is the only thing that
- * makes the client work without weakening ATS app-wide.
+ * for the box's own hostname. Browser websockets and the CLI can therefore use
+ * ordinary system trust with no certificate exceptions or pinned self-signed
+ * roots.
  */
 export const cloudInit = (opts: {
   hostname: string

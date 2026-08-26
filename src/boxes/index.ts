@@ -298,12 +298,14 @@ export const provision = async (
     )
 
     // The clock starts here, not when the box says it is ready. The provider
-    // charges for a machine from the moment it exists. Docker is local and has
-    // no provider rate, so its recorded cost is zero.
+    // charges for a machine from the moment it exists. Provider responses carry
+    // the current rate; the DigitalOcean catalogue remains the fallback for
+    // older responses that only identify a size. Docker reports zero.
+    const providerRate = machine.monthly > 0 ? (machine.monthly * 100) / 730 : 0
     await startMetering(
       db,
       opts.boxId,
-      opts.provider.kind === "digitalocean" ? await costCentsPerHour(db, opts.size) : 0,
+      providerRate || (opts.provider.kind === "digitalocean" ? await costCentsPerHour(db, opts.size) : 0),
     )
   } catch (err) {
     // The provider call succeeded and the database did not. Findable by the
@@ -398,7 +400,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
   // nothing about churn, and create-destroy-create is where the money leaks: a
   // droplet is billed from the moment it exists. The address number is far
   // above it on purpose — a carrier puts tens of thousands of subscribers
-  // behind one address, and the iPad app is a first-class client here.
+  // behind one address, and mobile browsers are first-class clients here.
   const createBox = pipeline(
     requireAuth({ db }),
     parseJson,
@@ -415,7 +417,7 @@ export const boxRoutes = (db: Connection, appUrl: string) => {
 
   return [
     // What the wizard renders. Served rather than hardcoded in the client so
-    // web and iOS cannot drift apart on what a box can be built with.
+    // provisioning and the web UI cannot drift on what a box can carry.
     get(
       "/boxes/catalog",
       authed(async c => {

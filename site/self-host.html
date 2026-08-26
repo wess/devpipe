@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Devpipe — run your own</title>
-<meta name="description" content="Devpipe is Apache-2.0. Run the whole control plane with DigitalOcean in production or local Docker for development, with durable machine operations and spending controls.">
+<meta name="description" content="Devpipe is Apache-2.0. Run the web, API, daemon, and CLI with DigitalOcean, Runpod, or local Docker backing persistent agent sessions.">
 <meta name="theme-color" content="#0B0E14">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
 <link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/plexmono-400.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/asylum.css">
+<link rel="stylesheet" href="/site.css">
 </head>
 <body>
 
@@ -27,7 +27,6 @@
     <nav class="rail-nav" aria-label="Devpipe">
       <a href="/">Overview</a>
       <a href="/self-host.html" aria-current="page">Self-host</a>
-      <a href="/asylum.html">Asylum</a>
     </nav>
   </header>
 
@@ -38,20 +37,19 @@
       <span class="quiet">It is the same thing we run.</span>
     </h1>
     <p class="lede">
-      Devpipe is a control plane for machines you own. DigitalOcean is the
-      production backend; local Docker is the development backend. The machine
-      lifecycle is adapter-based and journalled, so a server restart does not
-      turn a half-finished provider call into an invisible resource.
+      Devpipe is a control plane for persistent agent machines. DigitalOcean,
+      Runpod, and local Docker share one adapter contract. Machine operations
+      are journalled, so an API restart does not turn a half-finished provider
+      call into an invisible resource.
     </p>
 
     <div class="note">
       <p>
         <strong>Nothing is sold and nothing is charged.</strong> There is no
         payment processor in this and no billing code — Devpipe creates machines
-        on your DigitalOcean account and DigitalOcean bills you for them, the
-        same as if you had clicked Create in their console. What the software
-        adds is that it knows what those machines cost, tells you, and stops
-        when you say stop.
+        in the provider account you connect, and that provider bills you. What
+        the software adds is durable lifecycle control, cost visibility, and a
+        cap that stops new machines when you say stop.
       </p>
     </div>
 
@@ -62,7 +60,7 @@
         <tbody>
           <tr><td><b>DigitalOcean</b></td><td>Production</td><td>Public VMs, persistent volumes, provider firewall and DNS, usage metering, and GPUs.</td></tr>
           <tr><td><b>Local Docker</b></td><td>Developer preview</td><td>Lifecycle development and contract tests on one host. Named volumes persist; it is not a multi-tenant security boundary.</td></tr>
-          <tr><td><b>Runpod</b></td><td>Planned</td><td>GPU-oriented Pods after the OCI runtime and outbound tunnel pass the same recovery and workspace suite. It is not advertised as working today.</td></tr>
+          <tr><td><b>Runpod</b></td><td>Preview</td><td>CPU Pods using a published OCI image, trusted HTTPS proxy endpoints, and persistent network volumes. No per-box DNS or provider firewall is claimed.</td></tr>
         </tbody>
       </table>
     </div>
@@ -143,7 +141,25 @@ ns3.digitalocean.com</code></pre>
       </li>
     </ol>
 
-    <h2>And two things that are not DigitalOcean's</h2>
+    <h2>Using Runpod instead</h2>
+    <p>
+      Build the same box image, publish it to a registry Runpod can read, and
+      select the Runpod adapter before starting the API. The setup wizard then
+      validates a Runpod API key; DigitalOcean DNS and SSH-key steps are not
+      required.
+    </p>
+    <pre><code>docker build -f deploy/docker/box.Dockerfile -t registry.example/devpipe-box:latest .
+docker push registry.example/devpipe-box:latest
+export DEVPIPE_MACHINE_PROVIDER=runpod
+export DEVPIPE_RUNPOD_IMAGE=registry.example/devpipe-box:latest
+export RUNPOD_API_KEY=…
+bun run dev</code></pre>
+    <p class="dim">
+      The stock image includes the daemon, shells, Git, and search tools. Publish
+      a derived image when your agents need additional runtimes or CLIs.
+    </p>
+
+    <h2>And two things outside the provider</h2>
 
     <div class="grid">
       <div class="card">
@@ -257,7 +273,7 @@ bun run dev</code></pre>
           </tr>
           <tr>
             <td><b>Member</b></td>
-            <td>Their own boxes, workspaces, vault entries and runs, and see what they have cost.</td>
+            <td>Their own boxes, workspaces, vault entries and terminal sessions, and see what they have cost.</td>
             <td>Anything administrative at all.</td>
           </tr>
         </tbody>
@@ -301,11 +317,11 @@ bun run dev</code></pre>
     <div class="grid">
       <a class="card" href="https://github.com/wess/devpipe">
         <h3>Source and issues →</h3>
-        <p>Bun and TypeScript for the control plane, Rust for the terminal core and the per-box daemon, Swift for iOS. Apache-2.0.</p>
+        <p>Bun and TypeScript for the control plane and web workspace; Rust for the terminal core, per-box daemon, and CLI. Apache-2.0.</p>
       </a>
-      <a class="card" href="/asylum.html">
-        <h3>Asylum →</h3>
-        <p>The desktop half, free and also Apache-2.0. Races several coding agents at one task and lets you merge whichever won.</p>
+      <a class="card" href="https://devpipe.com/install.sh">
+        <h3>Devpipe CLI →</h3>
+        <p>Install one binary, then use <code>devpipe attach &lt;box&gt;</code> to resume a persistent terminal without opening SSH.</p>
       </a>
       <a class="card" href="/">
         <h3>Or just use ours →</h3>
@@ -319,7 +335,7 @@ bun run dev</code></pre>
     <nav class="foot-nav" aria-label="Site">
       <a href="/">Home</a>
       <a href="/self-host.html">Self-host</a>
-      <a href="/asylum.html">Asylum</a>
+      <a href="https://devpipe.com/install.sh">CLI</a>
       <a href="/terms.html">Terms</a>
       <a href="/privacy.html">Privacy</a>
       <a href="/aup.html">Acceptable use</a>

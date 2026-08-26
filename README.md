@@ -2,13 +2,11 @@
 
 Agents that keep working when you close the laptop.
 
-A run is the unit: one agent, on its own branch, in its own worktree, on a box
-you own. Start one from anywhere, watch what it is doing, answer it when it asks
-— from a browser, a phone, or the terminal. The machine is rented by the hour
-and given back when nobody is using it; the files are on a volume that outlives
-it.
-
-There is a terminal, and it is very good. It is not the product.
+A box is a durable remote workspace for coding agents. Start an agent in a
+persistent terminal, close the browser or laptop, and attach to the same session
+later from the web app or the `devpipe` CLI. The machine is rented by the hour
+and can sleep when nobody is using it; its files live on a workspace that
+outlives the compute.
 
 ```
 src/            the Atlas app — API and web client (Bun + TypeScript)
@@ -20,32 +18,28 @@ src/            the Atlas app — API and web client (Bun + TypeScript)
   vault/ workspaces/ settings/ users/ admin/ terminals/
   web/          the React client, including the terminal
 migrations/     schema, one directory per change, up and down
-core/           Rust: sinclair's VT behind a C ABI → iOS staticlib and .wasm
+core/           Rust: sinclair's VT compiled to WebAssembly for the browser
 daemon/         Rust: the per-box daemon — ptys, files, and a port proxy
-ios/            Swift: the iPhone and iPad client
+                plus the cross-platform `devpipe` CLI
 site/           the lander, Caddyfile, and deploy
 deploy/         box provisioning and the daemon's systemd unit
 scripts/        sweep — what the provider is billing for that nothing claims
 ```
 
-## One emulator, two clients
+## One persistent session, two ways in
 
-`core/` compiles to **three** targets from one source: a static library the
-iPad app links, a `.wasm` the browser instantiates, and an rlib the tests use.
-Web and iOS therefore agree on what a byte stream means — cursor movement,
-wide characters, scroll regions, colour — because there is one implementation
-rather than two that were made to look alike.
-
-The layout matches for the same reason: a column of boxes and their terminals
-on the left, the terminal filling the rest. Switching device should not mean
-relearning where anything is.
+`devpiped` owns each PTY on the box. A browser or CLI attachment is only a
+subscription: disconnecting drops the transport, not the shell or the agent.
+Reattaching replays the current terminal screen. The browser renders that byte
+stream with the Rust emulator in `core/`; the CLI uses the local terminal.
 
 ## Running one of your own
 
 Apache-2.0, and the repository is the whole product — there is no crippled
 edition. DigitalOcean is the production backend used by devpipe.com. Local
 Docker is a development backend built against the same lifecycle contract;
-Runpod is the next backend, not one the current release pretends is complete.
+Runpod uses that OCI image with Pods, HTTPS proxy endpoints, and network-volume
+workspaces.
 
 Provider calls do not live in routes. The machine layer journals an operation
 before creating, releasing, or deleting a resource, tags the provider resource
@@ -54,16 +48,15 @@ restart. Compute, workspaces, network policy, DNS, and usage are explicit
 capabilities because no honest adapter can assume every provider has all five.
 See [docs/providers.md](docs/providers.md).
 
-Four things it needs before it can build anything, and the second is the one
-people trip on:
+The first-run requirements depend on the backing provider:
 
 | | |
 |---|---|
-| **A DigitalOcean account** | API → Tokens → Generate New Token, with **Write** ticked as well as Read. That token creates and destroys droplets, detaches volumes and writes DNS, so give it an account of its own rather than one shared with unrelated infrastructure. A new account is usually capped at 10 droplets and has no GPU access; both are raised by asking support. |
-| **A domain whose DNS is on that account** | Networking → Domains → Add a domain, then point the registrar's nameservers at `ns1.digitalocean.com` (and ns2, ns3). Not merely a domain you own: every box gets an `A` record under it and that record is what makes its certificate possible. A domain hosted anywhere else gives you boxes that build perfectly, never resolve, and never get TLS. |
+| **A provider** | DigitalOcean needs a write-enabled API token, its DNS zone, and ideally an SSH key. Runpod needs an API key and `DEVPIPE_RUNPOD_IMAGE` pointing to a published box image. Local Docker needs that image built on the API host. |
+| **A box address** | DigitalOcean writes each box beneath a domain hosted on that account. Runpod uses its trusted HTTPS proxy. Docker publishes a random loopback port and the API relays it. |
 | **Postgres** | Sessions, boxes, the audit trail, the sealed credentials. It wants a backup, somewhere the database host is not. |
 | **A host** | A small droplet. It provisions and proxies; it compiles nothing. |
-| **An SSH key on the account** | Settings → Security → Add SSH Key. Optional, and it is the only way onto a box that wedges partway through setup — which is exactly when nothing else works. |
+| **An SSH key on DigitalOcean** | Optional, and the only way onto a VM that wedges partway through setup — which is exactly when nothing else works. |
 
 `DEVPIPE_SECRET_KEY` is the one secret that cannot live in the database, because
 it is what encrypts the database's secrets:
@@ -78,10 +71,10 @@ letting that pass quietly.
 
 The first account registered becomes the owner — exactly one, enforced by a
 unique index rather than by agreement. Set `DEVPIPE_SETUP_TOKEN` before exposing
-a fresh instance and the claim form requires it. The wizard then opens by itself: the
-provider token, the domain, an SSH key, a spending cap. Each is checked against
-DigitalOcean before it is accepted, because every one of them fails hours later
-looking like something else.
+a fresh instance and the claim form requires it. The wizard then opens by itself
+and shows only the requirements for the selected provider. Credentials are
+checked before they are stored; DigitalOcean also checks its DNS zone and SSH
+keys.
 
 ### One owner, and a team under them
 
@@ -130,7 +123,24 @@ bun install
 bun run dev            # api on :3000, web on :3001
 ```
 
-The app is at `/runs`; `/` is the lander.
+The app is at `/terminals`; `/` is the lander.
+
+### CLI
+
+Install the CLI, sign in once, and attach by box name:
+
+```sh
+curl -fsSL https://devpipe.com/install.sh | sh
+devpipe login
+devpipe boxes
+devpipe attach mybox
+```
+
+`attach` wakes a sleeping box, reuses its newest live shell, and leaves it
+running when you detach with `Ctrl-]`. Use `--new` for a fresh shell or
+`devpipe run mybox -- <command>` for a one-off command. Port forwarding and file
+transfer use the same authenticated daemon connection; run `devpipe --help` for
+the complete command list.
 
 ### Using local Docker for boxes
 
@@ -177,10 +187,8 @@ before it declares success. Detailed backend and production notes live in
 [docs/providers.md](docs/providers.md) and [docs/production.md](docs/production.md).
 
 Boxes are provisioned with cloud-init and get a real Let's Encrypt certificate
-for their own subdomain. That is not cosmetic: iOS App Transport Security
-evaluates system trust *before* an app's pinning code is consulted, so a
-self-signed certificate can never be rescued by pinning. See
-[docs/spikes.md](docs/spikes.md).
+for their own subdomain, so browser and CLI connections use ordinary system
+trust without certificate exceptions.
 
 ## Licence
 

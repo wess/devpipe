@@ -1,9 +1,7 @@
 # devpipe.com — the lander, and nothing else yet.
 #
-# Certificates are issued automatically over HTTP-01. That is the reason this
-# exists at all: iOS refuses a self-signed certificate before an app's pinning
-# code is ever consulted, so every box a client talks to needs a real one.
-# See docs/spikes.md.
+# Certificates are issued automatically over HTTP-01, so every box uses the
+# ordinary browser and operating-system trust path with no TLS exceptions.
 
 {
 	email wess@devpipe.com
@@ -50,7 +48,7 @@ devpipe.com, www.devpipe.com {
 		header Cache-Control "public, max-age=300"
 	}
 
-	# The one-liner that installs dpctl. Served from disk beside the binaries
+	# The one-liner that installs the Devpipe CLI. Served from disk beside the binaries
 	# it fetches rather than through the app, so `curl … | sh` does not depend
 	# on the API tier being up — the first thing a new user runs should not
 	# fail for a reason that has nothing to do with them.

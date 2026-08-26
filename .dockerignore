@@ -4,3 +4,8 @@
 !daemon/Cargo.lock
 !daemon/src/
 !daemon/src/**
+daemon/target/
+daemon/target/**
+!deploy/
+!deploy/docker/
+!deploy/docker/entrypoint.sh

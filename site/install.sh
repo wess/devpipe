@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Put `dpctl` on this machine.
+# Put `devpipe` on this machine.
 #
 #   curl -fsSL https://devpipe.com/install.sh | sh
 #
@@ -19,15 +19,15 @@ os="$(uname -s)"
 arch="$(uname -m)"
 
 case "$os" in
-  Darwin) asset="dpctl-macos" ;;   # universal: one file, both architectures
+  Darwin) asset="devpipe-macos" ;;   # universal: one file, both architectures
   Linux)
     case "$arch" in
-      x86_64|amd64) asset="dpctl" ;;
-      *) echo "dpctl: no Linux build for $arch yet. Ask, and it will exist." >&2; exit 1 ;;
+      x86_64|amd64) asset="devpipe" ;;
+      *) echo "devpipe: no Linux build for $arch yet. Ask, and it will exist." >&2; exit 1 ;;
     esac
     ;;
   *)
-    echo "dpctl: no build for $os. On Windows, WSL runs the Linux one." >&2
+    echo "devpipe: no build for $os. On Windows, WSL runs the Linux one." >&2
     exit 1
     ;;
 esac
@@ -37,9 +37,9 @@ esac
 # it needs.
 if [ -z "$DEST" ]; then
   if [ -w "/usr/local/bin" ] 2>/dev/null; then
-    DEST="/usr/local/bin/dpctl"
+    DEST="/usr/local/bin/devpipe"
   else
-    DEST="$HOME/.local/bin/dpctl"
+    DEST="$HOME/.local/bin/devpipe"
     mkdir -p "$HOME/.local/bin"
   fi
 fi
@@ -60,5 +60,5 @@ case ":$PATH:" in
   *) echo "Note: $(dirname "$DEST") is not on your PATH." ;;
 esac
 echo
-echo "  dpctl login"
-echo "  dpctl connect <box>"
+echo "  devpipe login"
+echo "  devpipe attach <box>"

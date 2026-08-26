@@ -41,7 +41,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util", "fs", "process"] }
 
 # Sinclair's pty and terminal core, unmodified and pinned to the same released
-# source as the browser/iOS emulator. A clean checkout needs no sibling repo.
+# source as the browser emulator. A clean checkout needs no sibling repo.
 pty = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
 vt = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
 

@@ -78,7 +78,9 @@ fn expand(path: &str) -> PathBuf {
 }
 
 fn home() -> PathBuf {
-    std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/root"))
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/root"))
 }
 
 fn seconds(meta: &std::fs::Metadata) -> u64 {
@@ -112,7 +114,13 @@ pub async fn list(
     headers: HeaderMap,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
@@ -125,7 +133,9 @@ pub async fn list(
     for item in read.flatten() {
         // `symlink_metadata`, not `metadata`: a broken link is still an entry
         // worth listing, and following one turns a listing into a traversal.
-        let Ok(meta) = std::fs::symlink_metadata(item.path()) else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(item.path()) else {
+            continue;
+        };
         entries.push(Entry {
             name: item.file_name().to_string_lossy().to_string(),
             dir: meta.is_dir(),
@@ -138,11 +148,25 @@ pub async fn list(
     // person has ever read is ordered.
     entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.cmp(&b.name)));
 
-    Json(Listing { path: path.to_string_lossy().to_string(), entries }).into_response()
+    Json(Listing {
+        path: path.to_string_lossy().to_string(),
+        entries,
+    })
+    .into_response()
 }
 
-pub async fn read(State(app): State<App>, headers: HeaderMap, Query(q): Query<PathQuery>) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+pub async fn read(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Response {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
@@ -151,7 +175,10 @@ pub async fn read(State(app): State<App>, headers: HeaderMap, Query(q): Query<Pa
         Err(e) => return failed(&path, e),
     };
     if meta.is_dir() {
-        return refuse(StatusCode::BAD_REQUEST, format!("{} is a directory", path.display()));
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            format!("{} is a directory", path.display()),
+        );
     }
 
     let file = match tokio::fs::File::open(&path).await {
@@ -177,12 +204,21 @@ pub async fn write(
     Query(q): Query<PathQuery>,
     req: Request,
 ) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
     if !path.is_absolute() {
-        return refuse(StatusCode::BAD_REQUEST, "give a path from the root, or one starting with ~");
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "give a path from the root, or one starting with ~",
+        );
     }
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -195,7 +231,9 @@ pub async fn write(
     // an editor opens it, the agent reads it, and nothing says it is a torso.
     let temp = path.with_extension(format!(
         "{}.dp-partial",
-        path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()
+        path.extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_default()
     ));
     let mut file = match tokio::fs::File::create(&temp).await {
         Ok(f) => f,
@@ -211,7 +249,10 @@ pub async fn write(
             Ok(b) => b,
             Err(e) => {
                 let _ = tokio::fs::remove_file(&temp).await;
-                return refuse(StatusCode::BAD_REQUEST, format!("the upload stopped early: {e}"));
+                return refuse(
+                    StatusCode::BAD_REQUEST,
+                    format!("the upload stopped early: {e}"),
+                );
             }
         };
         if let Err(e) = file.write_all(&bytes).await {
@@ -238,8 +279,18 @@ pub async fn write(
 /// The alternative is the client walking the tree and asking for each file,
 /// which is correct and is a request per file — fine for a folder, miserable
 /// for a project. `tar` is on every box this runs on.
-pub async fn tar(State(app): State<App>, headers: HeaderMap, Query(q): Query<PathQuery>) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+pub async fn tar(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Response {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
@@ -248,12 +299,18 @@ pub async fn tar(State(app): State<App>, headers: HeaderMap, Query(q): Query<Pat
         Err(e) => return failed(&path, e),
     };
     if !meta.is_dir() {
-        return refuse(StatusCode::BAD_REQUEST, format!("{} is not a directory", path.display()));
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            format!("{} is not a directory", path.display()),
+        );
     }
     // `-C parent name` rather than an absolute path, so the archive holds
     // relative names and unpacks into whatever directory the caller chose.
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-        return refuse(StatusCode::BAD_REQUEST, "that directory has no name to archive");
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "that directory has no name to archive",
+        );
     };
 
     let spawned = tokio::process::Command::new("tar")
@@ -291,8 +348,18 @@ pub async fn tar(State(app): State<App>, headers: HeaderMap, Query(q): Query<Pat
         .into_response()
 }
 
-pub async fn mkdir(State(app): State<App>, headers: HeaderMap, Query(q): Query<PathQuery>) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+pub async fn mkdir(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Response {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
@@ -302,8 +369,18 @@ pub async fn mkdir(State(app): State<App>, headers: HeaderMap, Query(q): Query<P
     }
 }
 
-pub async fn remove(State(app): State<App>, headers: HeaderMap, Query(q): Query<PathQuery>) -> Response {
-    if !authorized(&app, &headers, &TokenQuery { token: q.token.clone() }) {
+pub async fn remove(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Response {
+    if !authorized(
+        &app,
+        &headers,
+        &TokenQuery {
+            token: q.token.clone(),
+        },
+    ) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let path = expand(&q.path);
@@ -336,9 +413,11 @@ mod tests {
         // do, so it stays a literal and fails as a missing directory.
         unsafe { std::env::set_var("HOME", "/home/devpipe") };
         assert_eq!(expand("~"), Path::new("/home/devpipe"));
-        assert_eq!(expand("~/src/main.rs"), Path::new("/home/devpipe/src/main.rs"));
+        assert_eq!(
+            expand("~/src/main.rs"),
+            Path::new("/home/devpipe/src/main.rs")
+        );
         assert_eq!(expand("/etc/hosts"), Path::new("/etc/hosts"));
         assert_eq!(expand("~other/x"), Path::new("~other/x"));
     }
-
 }

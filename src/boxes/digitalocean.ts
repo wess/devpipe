@@ -282,7 +282,7 @@ export const boxFirewallSpec = (tag: string, sshSources: readonly string[] = ANY
     // else about proxying a box takes deliberate effort, and this took none.
     { protocol: "tcp", ports: "22", sources: { addresses: [...sshSources] } },
     // Let's Encrypt's HTTP-01 challenge. Without it the box never gets a
-    // certificate, and without a certificate iOS will not talk to it at all.
+    // certificate, so browser and CLI clients cannot establish trusted TLS.
     { protocol: "tcp", ports: "80", sources: { addresses: ANYWHERE } },
     // Caddy, and through it the daemon. 7788 is deliberately absent: the
     // daemon binds loopback and is only ever reached through the proxy.

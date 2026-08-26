@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { from } from "@atlas/db"
 import { router } from "@atlas/server"
-import { terminalRoutes } from "../src/terminals/index.ts"
+import { terminalRoutes, terminalSocket } from "../src/terminals/index.ts"
 import { ATTACH, ATTACH_TTL } from "../src/util/boxscope.ts"
 import { sha256Hex } from "../src/util/token.ts"
 import { db, truncateAll } from "./setup.ts"
@@ -104,6 +104,21 @@ describe("the credential a terminal is opened with", () => {
   test("still points at the box itself, not through the control plane", async () => {
     const { data } = await call(`/boxes/${boxId}/connection`, token)
     expect(data.url).toBe("wss://box.devpipe.test")
+  })
+
+  test("the CLI can authenticate a relayed attach with its WebSocket header", async () => {
+    await db.execute(
+      from("boxes")
+        .where(q => q("id").equals(boxId))
+        .update({ endpoint: "http://127.0.0.1:49152" }),
+    )
+    const { data } = await call(`/boxes/${boxId}/connection`, token)
+    const relay = (await terminalSocket(db)(
+      new Request(`http://test/boxes/${boxId}/socket/v1/sessions/s7/attach`, {
+        headers: { upgrade: "websocket", authorization: `Bearer ${data.token}` },
+      }),
+    )) as any
+    expect(relay?.url).toBe(`ws://127.0.0.1:49152/v1/sessions/s7/attach?token=${encodeURIComponent(data.token)}`)
   })
 
   test("is refused without a session", async () => {

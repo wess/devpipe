@@ -22,15 +22,11 @@ const withEsc = (data: Uint8Array): Uint8Array => {
 /**
  * A live terminal.
  *
- * Owns the canvas, the emulator, and the socket. The layout it sits in — a
- * column of sessions on the left, this filling the rest — is the same on the
- * iPad, because it is the same product and switching device should not mean
- * relearning where anything is.
+ * Owns the canvas, the emulator, and the socket inside the browser workspace.
  *
  * Input does not come from the canvas. A canvas cannot raise a software
- * keyboard however focusable it is made, so on a phone or a tablet this was a
- * terminal with no way to type into it — the client was a desktop client that
- * happened to reflow. Keys arrive through an offscreen textarea instead, which
+ * keyboard however focusable it is made, so on a phone or a tablet this can be
+ * a terminal with no way to type into it. Keys arrive through an offscreen textarea instead, which
  * is also what makes an IME work: composing text has to live in a real editable
  * field until it is committed.
  */
@@ -520,8 +516,8 @@ export const TerminalView: React.FC<{
         if (key === "v") return
       }
       // A latched modifier applies to the next key from anywhere, including a
-      // hardware keyboard paired with a tablet — which is the ordinary way an
-      // iPad is used for this, and where the bar is still the only Esc.
+      // hardware keyboard paired with a tablet, where the bar may still be the
+      // only accessible Esc key.
       if ((latchRef.current.ctrl || latchRef.current.alt) && e.key.length === 1) {
         e.preventDefault()
         sendText(e.key)

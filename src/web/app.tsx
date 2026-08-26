@@ -1,5 +1,4 @@
 import {
-  Activity,
   CircleDot,
   CreditCard,
   KeyRound,
@@ -21,12 +20,10 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { commandOf } from "../util/shell.ts"
 import * as api from "./api.ts"
-import { applyTheme, getTheme } from "./asylum/theme.ts"
 import { Admin } from "./components/Admin.tsx"
 import { BoxSetup } from "./components/BoxSetup.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { Previews } from "./components/Previews.tsx"
-import { Runs } from "./components/Runs.tsx"
 import { Settings } from "./components/Settings.tsx"
 import { Setup } from "./components/Setup.tsx"
 import { ShareTerminal } from "./components/ShareTerminal.tsx"
@@ -338,8 +335,7 @@ const Reset: React.FC<{ token: string; onDone: (notice: string) => void }> = ({ 
 }
 
 // ---------------------------------------------------------------------------
-// Workspace: a column of terminals on the left, the terminal on the right.
-// The same shape as the iPad app, deliberately.
+// Workspace: a column of boxes and sessions on the left, the terminal on the right.
 // ---------------------------------------------------------------------------
 
 const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
@@ -372,8 +368,8 @@ const Workspace: React.FC<{ vtReady: boolean }> = ({ vtReady }) => {
   activeSessionRef.current = activeSession
 
   // The agents actually on this box, with the argv each is launched by. The
-  // catalogue comes from the API rather than a copy here, so web and iOS
-  // cannot drift on what a tool is called or how it starts.
+  // catalogue comes from the API rather than a copy here, so provisioning and
+  // the client cannot drift on what a tool is called or how it starts.
   const [catalog, setCatalog] = useState<api.Catalog | null>(null)
   useEffect(() => {
     api
@@ -1013,7 +1009,7 @@ const PreviewGate: React.FC<{ slug: string }> = ({ slug }) => {
           <>
             <p className="note bad">{error}</p>
             <button type="button" onClick={() => leave(HOME_PATH)}>
-              Back to your runs
+              Back to your machines
             </button>
           </>
         ) : (
@@ -1144,24 +1140,17 @@ const App: React.FC = () => {
   return (
     <div className="app">
       <nav className="topbar">
-        <button type="button" className="brand" onClick={to("runs")}>
-          <Activity size={16} />
+        <button type="button" className="brand" onClick={to("workspace")}>
+          <TerminalIcon size={16} />
           <span>Devpipe</span>
         </button>
         <span className="grow" />
-        {/* The order is the argument. Runs is the app; the machine — its
-            terminals, its ports, its build log — is where you go when a run
-            needs a person, which is why it reads as a place rather than as
-            the way back. */}
-        <button type="button" className={`ghost small ${route.view === "runs" ? "on" : ""}`} onClick={to("runs")}>
-          <Activity size={14} /> Runs
-        </button>
         <button
           type="button"
           className={`ghost small ${route.view === "workspace" ? "on" : ""}`}
           onClick={to("workspace")}
         >
-          <TerminalIcon size={14} /> Machine
+          <TerminalIcon size={14} /> Machines
         </button>
         {(user?.role === "owner" || user?.role === "admin") && (
           <button type="button" className={`ghost small ${route.view === "admin" ? "on" : ""}`} onClick={to("admin")}>
@@ -1191,7 +1180,7 @@ const App: React.FC = () => {
             setSignedIn(false)
             // Back to the home path so the next sign-in does not land on the
             // admin screen the previous account was looking at.
-            go({ view: "runs", tab: "overview" }, { replace: true })
+            go({ view: "workspace", tab: "overview" }, { replace: true })
           }}
         >
           <LogOut size={14} />
@@ -1212,7 +1201,6 @@ const App: React.FC = () => {
           </button>
         </p>
       )}
-      {route.view === "runs" && <Runs onBack={() => go({ view: "workspace", tab: "overview" })} />}
       {route.view === "workspace" && <Workspace vtReady={ready} />}
       {route.view === "spend" && <Spend />}
       {route.view === "vault" && <Vault />}
@@ -1221,10 +1209,6 @@ const App: React.FC = () => {
     </div>
   )
 }
-
-// Before the first paint, so the runs view never renders light on a dark
-// machine and then corrects itself a frame later.
-applyTheme(getTheme())
 
 const root = document.getElementById("root")
 if (root)

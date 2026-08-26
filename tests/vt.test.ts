@@ -35,7 +35,7 @@ describe("the terminal core, in WebAssembly", () => {
     const t = new Terminal(20, 2)
     t.feed(new TextEncoder().encode("\x1b[38;2;255;0;0mR\x1b[48;5;33mB"))
     const snap = t.snapshot()!
-    // Same packing the iOS client reads: tag << 24 | payload.
+    // The renderer contract: tag << 24 | payload.
     expect(t.cellAt(snap.cells, 0).fg).toBe((2 << 24) | (255 << 16))
     expect(t.cellAt(snap.cells, 1).bg).toBe((1 << 24) | 33)
     t.dispose()

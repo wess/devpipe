@@ -1,11 +1,11 @@
-/* Asylum's pages on devpipe.com.
+/* Devpipe's pages on devpipe.com.
  *
  * The lander keeps its styles inline because it is one page with one job. These
  * are three long documents that must not drift from each other, so they share a
  * sheet — served from `site/` with an explicit content type (see serve.ts), the
  * same way the lander's script is a file rather than a <style> block.
  *
- * Same amber-CRT palette as the lander. Asylum is part of Devpipe, not a
+ * Same amber-CRT palette as the lander. Devpipe is part of Devpipe, not a
  * neighbouring product, and a second visual identity would say otherwise. */
 
 @font-face {

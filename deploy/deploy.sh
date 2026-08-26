@@ -59,4 +59,4 @@ echo "==> fingerprint"
 
 echo
 echo "connect with:"
-echo "  ./ios/build.sh --host $HOST --port 7788 --token $TOKEN --fingerprint <fingerprint above>"
+echo "  DEVPIPE_DIRECT=wss://$HOST:7788 DEVPIPE_TOKEN=$TOKEN devpipe attach box"

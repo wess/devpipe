@@ -3,7 +3,7 @@
  *
  * A stolen session token works from anywhere. Nothing about a request says who
  * is holding it, so a cookie lifted off a laptop, a token read out of a backup,
- * or a `dpctl` config copied off a shared machine all look exactly like the
+ * or a CLI credential copied off a shared machine all look exactly like the
  * person they were taken from — for thirty days.
  *
  * Binding is the cheap half of the answer. The address is the obvious thing to
@@ -26,8 +26,11 @@
 
 /** Longest first: Edge and Chrome both say "Chrome", Chrome says "Safari". */
 const PROGRAMS: readonly (readonly [string, string])[] = [
+  ["devpipe/", "Devpipe"],
   ["Devpipe", "Devpipe"],
-  ["dpctl", "dpctl"],
+  // The old binary name remains an alias so an upgraded CLI does not invalidate
+  // the session it is using to make the first request after the upgrade.
+  ["dpctl", "Devpipe"],
   ["Edg/", "Edge"],
   ["OPR/", "Opera"],
   ["Firefox", "Firefox"],
@@ -82,4 +85,7 @@ export const agentClass = (userAgent: string | null | undefined): string => {
  * and clients that send no agent at all, must not be signed out by a rule they
  * were never given a chance to satisfy.
  */
-export const sameClient = (stored: string, presented: string): boolean => stored === "" || stored === presented
+export const sameClient = (stored: string, presented: string): boolean => {
+  const renamed = (value: string) => value.replace(/^dpctl\//, "Devpipe/")
+  return stored === "" || renamed(stored) === renamed(presented)
+}

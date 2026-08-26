@@ -37,9 +37,8 @@ export const SLOP = 10
 /**
  * How long a finger must stay still before it is selecting rather than waiting.
  *
- * Matched to the platform convention rather than chosen: this is roughly what
- * iOS and Android both use for their own text selection, and a terminal that
- * disagrees feels broken in a way nobody can name.
+ * Matched to mobile-platform convention rather than chosen; a terminal that
+ * disagrees with the rest of the device feels broken in a way nobody can name.
  */
 export const LONG_PRESS_MS = 500
 

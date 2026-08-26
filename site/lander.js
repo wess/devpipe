@@ -78,7 +78,7 @@
     for (var i = 0; i < MAX_LINES; i++) addLine();
     moveCaret();
     tickUptime();
-    resumed.textContent = 'Runs keep going while you are disconnected.';
+    resumed.textContent = 'Sessions keep going while you are disconnected.';
     resumed.classList.add('show');
     return;
   }

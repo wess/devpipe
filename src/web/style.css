@@ -1,6 +1,5 @@
-/* Same palette and faces as the lander and the iPad app. Three surfaces that
-   are obviously the same product matters more here than any one of them being
-   individually clever. */
+/* Same palette and faces as the lander. The public and authenticated surfaces
+   should read as one product. */
 :root {
   /* Declared, not implied. Without it the browser assumes a light page, and
      the system colour keywords its own stylesheet uses resolve accordingly —

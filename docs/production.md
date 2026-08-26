@@ -33,7 +33,7 @@ one release. The billing-code removal follows that rule by leaving legacy tables
 and columns in place while the application stops reading them. Remove obsolete
 schema only after the rollback target no longer needs it.
 
-After a deploy verify the public lander, `/api/ready`, `/runs`, and the provider
+After a deploy verify the public lander, `/api/ready`, `/terminals`, and the provider
 ledger. Provisioning tests can create real spend; use the documented sweep and
 confirm no unclaimed machine or volume remains.
 

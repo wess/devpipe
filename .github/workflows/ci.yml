@@ -57,11 +57,3 @@ jobs:
           DEVPIPE_DOCKER_CONTRACT: "1"
           DEVPIPE_DOCKER_IMAGE: devpipe-box:ci
         run: bun test --concurrency=1 tests/docker.test.ts
-
-  ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Test iOS packages
-        working-directory: ios
-        run: swift test

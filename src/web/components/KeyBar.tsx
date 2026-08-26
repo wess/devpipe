@@ -5,9 +5,7 @@ import type React from "react"
  *
  * A phone keyboard offers no Esc, no Ctrl, no Tab and no arrows, so without
  * this a coding agent's TUI cannot be interrupted, cannot cycle permission
- * modes, and cannot scroll its own history. The iOS client has carried one of
- * these from the start; this is the same set of keys in the same order, because
- * the two clients are the same product and muscle memory should carry across.
+ * modes, and cannot scroll its own history.
  *
  * Ordered by how often an agent CLI needs them, not by how a terminal app
  * usually lays this out.

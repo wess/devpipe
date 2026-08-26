@@ -91,9 +91,7 @@ async fn main() -> anyhow::Result<()> {
 async fn connect(
     url: &str,
 ) -> anyhow::Result<(
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
     #[derive(Debug)]
@@ -136,13 +134,6 @@ async fn connect(
         .dangerous()
         .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
         .with_no_client_auth();
-    let connector =
-        tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config));
-    Ok(tokio_tungstenite::connect_async_tls_with_config(
-        url,
-        None,
-        false,
-        Some(connector),
-    )
-    .await?)
+    let connector = tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config));
+    Ok(tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector)).await?)
 }

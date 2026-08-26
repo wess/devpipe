@@ -69,7 +69,11 @@ impl Session {
 
         let session = Arc::new(Session {
             id: id.clone(),
-            argv: if argv.is_empty() { vec![pty::default_shell()] } else { argv },
+            argv: if argv.is_empty() {
+                vec![pty::default_shell()]
+            } else {
+                argv
+            },
             output: output.clone(),
             pending: pending.clone(),
             waker,
@@ -91,7 +95,9 @@ impl Session {
                         break;
                     }
                     let want_write = !pending.lock().unwrap().is_empty();
-                    let Ok(ready) = pump.wait(want_write) else { break };
+                    let Ok(ready) = pump.wait(want_write) else {
+                        break;
+                    };
 
                     if ready.readable {
                         // Drain rather than one read per poll: a burst of

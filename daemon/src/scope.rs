@@ -33,7 +33,10 @@ type HmacSha256 = Hmac<Sha256>;
 pub const ATTACH: &str = "attach";
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Signs `<scope>.<expiry>`. Present in the daemon so the tests can mint what
@@ -159,8 +162,15 @@ mod tests {
         const VECTOR: &str = "attach.1800000000.arwHhRBqLMB0eloPxi83LaWr2JHvc-A1JwgxThDnm5s";
         // Checked against a fixed instant rather than the clock, so this is a
         // test of the format and not a thing that starts failing in 2027.
-        assert_eq!(scope_of(KEY, VECTOR, 1_700_000_000).as_deref(), Some(ATTACH));
-        assert_eq!(scope_of(KEY, VECTOR, 1_900_000_000), None, "expiry not enforced");
+        assert_eq!(
+            scope_of(KEY, VECTOR, 1_700_000_000).as_deref(),
+            Some(ATTACH)
+        );
+        assert_eq!(
+            scope_of(KEY, VECTOR, 1_900_000_000),
+            None,
+            "expiry not enforced"
+        );
     }
 
     #[test]
