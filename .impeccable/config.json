@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "em-dash-overuse",
+        "value": "29 em-dashes in body text",
+        "createdAt": "2026-08-26T00:46:45.106Z",
+        "reason": "Codex triage: long-form legal policy tables use these as semantic parentheticals; this visual fix does not authorize rewriting policy meaning."
+      }
+    ]
+  }
+}
