@@ -76,6 +76,9 @@ enum Saying {
         title: String,
         cols: u16,
         rows: u16,
+        /// False during the grace period: the child has gone but the final
+        /// screen is still here to be read.
+        running: bool,
     },
     Titled {
         title: String,
@@ -228,12 +231,6 @@ async fn serve_one(stream: UnixStream, session: Arc<Session>) {
 
     match asking {
         Asking::Describe => {
-            // During the grace period the session is still *readable* but it
-            // is not still running, and a list that says otherwise would offer
-            // people a session to resume that has already ended.
-            if !session.is_alive() {
-                return;
-            }
             let (cols, rows) = session.size();
             let _ = write_frame(
                 &mut writing,
@@ -243,6 +240,7 @@ async fn serve_one(stream: UnixStream, session: Arc<Session>) {
                     title: session.title(),
                     cols,
                     rows,
+                    running: session.is_alive(),
                 }),
             )
             .await;
@@ -400,12 +398,20 @@ pub struct Detail {
     pub title: String,
     pub cols: u16,
     pub rows: u16,
+    /// Whether the child is still there. A keeper answers for a few seconds
+    /// after its child has gone so a late client can still collect the final
+    /// screen — during which the session is readable but over.
+    pub running: bool,
 }
 
 impl Link {
-    /// Ask the keeper who it is. Doubles as the liveness check: a socket whose
-    /// keeper has gone answers nothing, and a session nobody can reach is one
-    /// that is over.
+    /// Ask the keeper who it is.
+    ///
+    /// `None` means the socket did not answer at all, which is the only thing
+    /// that makes it litter. A keeper that answers `running: false` is still
+    /// holding a screen somebody may be about to ask for — deleting its socket
+    /// for saying so is how listing the tree came to break the session it was
+    /// listing.
     pub async fn detail(&self) -> Option<Detail> {
         let mut stream = UnixStream::connect(&self.path).await.ok()?;
         write_frame(&mut stream, &Frame::control(&Asking::Describe))
@@ -419,12 +425,14 @@ impl Link {
                 title,
                 cols,
                 rows,
+                running,
             } => Some(Detail {
                 id,
                 argv,
                 title,
                 cols,
                 rows,
+                running,
             }),
             _ => None,
         }

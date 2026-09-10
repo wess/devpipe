@@ -135,14 +135,18 @@ impl Environment {
                 id: id.to_string(),
                 path: keeper::socket_path(&self.runtime, &self.spec.id, id),
             };
-            // Asking is the liveness check. A socket file whose keeper has
-            // gone is a file, and handing it back would open a pane over
-            // nothing.
-            if link.detail().await.is_none() {
-                self.forget(&link);
-                bail!("no such session");
+            // A socket file whose keeper has gone is a file, and handing it
+            // back would open a pane over nothing. A keeper whose child has
+            // finished is still there, but resuming it is not a thing that
+            // means anything.
+            match link.detail().await {
+                Some(found) if found.running => return Ok(link),
+                Some(_) => bail!("that session has finished"),
+                None => {
+                    self.forget(&link);
+                    bail!("no such session");
+                }
             }
-            return Ok(link);
         }
         self.start_session(argv, cols, rows).await
     }
@@ -277,14 +281,18 @@ impl Environment {
             // A keeper that does not answer has gone, and the socket it left
             // is litter. Clearing it here means the list is self-repairing
             // rather than needing a sweep nobody remembers to run.
+            //
+            // One that answers but is finished is neither: it is holding a
+            // screen for a few more seconds. Not listed, and not deleted.
             match link.detail().await {
-                Some(detail) => sessions.push(SessionInfo {
+                Some(detail) if detail.running => sessions.push(SessionInfo {
                     id: detail.id,
                     title: detail.title,
                     cols: detail.cols,
                     rows: detail.rows,
                     argv: detail.argv,
                 }),
+                Some(_) => {}
                 None => self.forget(&link),
             }
         }
