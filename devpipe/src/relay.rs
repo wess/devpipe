@@ -184,9 +184,9 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>) -> Result<()> {
 // The large `Err` is tungstenite's `ErrorResponse`, and the callback's shape is
 // theirs rather than ours.
 #[allow(clippy::result_large_err)]
-async fn accept_keeping_cookie(stream: TcpStream) -> Result<(Socket, String)> {
-    let mut cookie = String::new();
-    let taken = &mut cookie;
+async fn accept_keeping_cookie(stream: TcpStream) -> Result<(Socket, Presenting)> {
+    let mut presenting = Presenting::default();
+    let taken = &mut presenting;
     let socket = tokio_tungstenite::accept_hdr_async(
         stream,
         |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
@@ -194,13 +194,30 @@ async fn accept_keeping_cookie(stream: TcpStream) -> Result<(Socket, String)> {
                 && let Ok(value) = value.to_str()
                 && let Some(session) = cookie_named(value, SESSION_COOKIE)
             {
-                *taken = format!("{SESSION_COOKIE}={session}");
+                taken.cookie = format!("{SESSION_COOKIE}={session}");
+            }
+            // Forwarded, not dropped. The app binds a session to the shape of
+            // the client holding it, so a check made with no agent at all is a
+            // check the app is right to fail — and failing it ends the
+            // session, which is how this signed people out.
+            if let Some(value) = request.headers().get("user-agent")
+                && let Ok(value) = value.to_str()
+            {
+                taken.agent = value.to_string();
             }
             Ok(response)
         },
     )
     .await?;
-    Ok((socket, cookie))
+    Ok((socket, presenting))
+}
+
+/// What a browser presented on its way in: the session it holds, and enough
+/// about itself for the app to recognise it as the same client.
+#[derive(Debug, Default)]
+struct Presenting {
+    cookie: String,
+    agent: String,
 }
 
 /// Who is this, and what do they want.
@@ -209,7 +226,7 @@ async fn accept_keeping_cookie(stream: TcpStream) -> Result<(Socket, String)> {
 /// in step with whatever proxy is in front.
 async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
     stream.set_nodelay(true).ok();
-    let (mut socket, cookie) = accept_keeping_cookie(stream).await?;
+    let (mut socket, presenting) = accept_keeping_cookie(stream).await?;
 
     let opening = next_frame(&mut socket)
         .await?
@@ -260,7 +277,7 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
                 refuse(&mut socket, "this relay does not mint keys from sessions").await;
                 bail!("minting is not configured");
             };
-            let account = match verify.who(&cookie).await {
+            let account = match verify.who(&presenting.cookie, &presenting.agent).await {
                 Ok(account) => account,
                 Err(e) => {
                     refuse(&mut socket, "sign in first").await;

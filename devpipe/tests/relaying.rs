@@ -359,7 +359,15 @@ async fn pretend_app(good: &'static str, who: &'static str) -> String {
                 let mut buf = vec![0u8; 4096];
                 let n = stream.read(&mut buf).await.unwrap_or(0);
                 let request = String::from_utf8_lossy(&buf[..n]).to_string();
-                let signed_in = request.contains(good);
+                // The real app binds a session to the shape of the client
+                // holding it, and answers a request with no User-Agent by
+                // *ending* the session — which is right for a replayed cookie
+                // and is how the relay signed people out. So this stands in for
+                // that too: no agent, no answer.
+                let has_agent = request
+                    .lines()
+                    .any(|l| l.to_ascii_lowercase().starts_with("user-agent:") && l.len() > 12);
+                let signed_in = request.contains(good) && has_agent;
                 let body = format!("{{\"user\":{{\"username\":\"{who}\"}}}}");
                 let response = if signed_in {
                     format!(
@@ -379,14 +387,28 @@ async fn pretend_app(good: &'static str, who: &'static str) -> String {
     at
 }
 
-/// Ask the relay to mint a key, with whatever cookie a browser would have sent.
+/// Ask the relay to mint a key, with whatever a browser would have sent.
 async fn mint(url: &str, cookie: Option<&str>, can: devpipe::keys::Can) -> Result<String, String> {
+    mint_as(url, cookie, Some("Mozilla/5.0 (Macintosh) Safari/605"), can).await
+}
+
+async fn mint_as(
+    url: &str,
+    cookie: Option<&str>,
+    agent: Option<&str>,
+    can: devpipe::keys::Can,
+) -> Result<String, String> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut request = url.into_client_request().unwrap();
     if let Some(cookie) = cookie {
         request
             .headers_mut()
             .insert("cookie", cookie.parse().unwrap());
+    }
+    if let Some(agent) = agent {
+        request
+            .headers_mut()
+            .insert("user-agent", agent.parse().unwrap());
     }
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     socket
@@ -513,5 +535,58 @@ async fn asking_again_replaces_the_key_rather_than_adding_one() {
         .unwrap_err()
         .to_string();
     assert!(refused.contains("unauthorized"), "{refused}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The bug that signed people out.
+///
+/// The app binds a session to the coarse shape of the client holding it, so
+/// that a cookie lifted off a laptop and replayed by something else stops
+/// working. A check made with no `User-Agent` at all *is* something else — it
+/// does not skip that check, it fails it, and failing it ends the session. So
+/// the relay pressing a button signed the person out of the app.
+///
+/// The relay forwards the browser's own agent now: a proxy saying who it is
+/// acting for, rather than a client misreporting itself.
+#[tokio::test]
+async fn the_browsers_own_agent_is_forwarded_with_its_cookie() {
+    let app = pretend_app("dp_session=good", "wess").await;
+    let dir = std::env::temp_dir().join(format!("devpipe-relay-{}", devpipe::host::random_id(8)));
+    let relay = Relay::with_sessions(
+        devpipe::keys::Keys::open(&dir),
+        Some(devpipe::session_check::Asking::parse(&app).unwrap()),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = relay::run(listener, relay).await;
+    });
+
+    // A browser: cookie and agent both arrive, and the app recognises it.
+    assert!(
+        mint_as(
+            &url,
+            Some("dp_session=good"),
+            Some("Mozilla/5.0 (Macintosh) Safari/605"),
+            devpipe::keys::Can::Reach
+        )
+        .await
+        .is_ok()
+    );
+
+    // The shape this bug had: a valid session, presented by nothing in
+    // particular. The stand-in app refuses it exactly as the real one does.
+    assert!(
+        mint_as(
+            &url,
+            Some("dp_session=good"),
+            None,
+            devpipe::keys::Can::Reach
+        )
+        .await
+        .is_err(),
+        "a check with no agent must not be made at all"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
