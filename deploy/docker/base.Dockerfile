@@ -13,6 +13,12 @@
 #   devpipe serve --image devpipe-base
 FROM debian:trixie-slim
 
+# Links the published package back to the repository that built it, so the
+# thing people are asked to `docker pull` says where it came from.
+LABEL org.opencontainers.image.source="https://github.com/wess/devpipe"
+LABEL org.opencontainers.image.description="Devpipe base: Debian with the toolchains an agent needs already on it"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -62,6 +68,25 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 ENV BUN_INSTALL=/usr/local/bun
 RUN curl -fsSL https://bun.sh/install | bash
+
+# Debian's /etc/profile *assigns* PATH rather than extending it, so a login
+# shell throws away everything set with ENV above — `bash -l` in here had a
+# toolchain with no rustc and no bun in it. profile.d is sourced after that
+# assignment, which is the whole reason it exists.
+#
+# It matters because agents spawn login shells. A devpipe session does not
+# (the backend execs the shell directly, keeping the image's environment), so
+# this failure only appears one level down, which is the worst place for it.
+RUN printf '%s\n' \
+      'RUSTUP_HOME=/usr/local/rustup' \
+      'CARGO_HOME=/usr/local/cargo' \
+      'BUN_INSTALL=/usr/local/bun' \
+      'case ":$PATH:" in' \
+      '  *":/usr/local/cargo/bin:"*) ;;' \
+      '  *) PATH="/usr/local/cargo/bin:/usr/local/bun/bin:$PATH" ;;' \
+      'esac' \
+      'export PATH RUSTUP_HOME CARGO_HOME BUN_INSTALL' \
+    > /etc/profile.d/devpipe.sh
 
 RUN npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force
