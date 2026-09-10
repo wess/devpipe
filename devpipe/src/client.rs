@@ -26,6 +26,16 @@ pub struct Client {
 impl Client {
     pub async fn connect(url: &str, token: &str) -> Result<(Client, HostInfo)> {
         let (socket, _) = tokio_tungstenite::connect_async(url).await?;
+        Client::over(socket, token).await
+    }
+
+    /// Greet a host on a socket somebody else opened.
+    ///
+    /// A relay splices a client to a machine and then stops taking part, so
+    /// from here the handshake is the ordinary one and the host token is still
+    /// the client's to present. The relay carried the introduction; it is not
+    /// a party to what follows.
+    pub async fn over(socket: Socket, token: &str) -> Result<(Client, HostInfo)> {
         let (sink, source) = socket.split();
         let mut client = Client { sink, source };
 

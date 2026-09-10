@@ -32,9 +32,19 @@ pub struct Machine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Absent means read it off the far side over ssh, which is the point of
-    /// not having to keep it here.
+    /// not having to keep it here. A relayed machine has to keep it: there is
+    /// no ssh to read it over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// A relay this machine has dialled out to, for one it cannot be reached
+    /// at directly. Slower and less private than ssh — the relay terminates
+    /// TLS and so sees the token going past — and the only thing a browser can
+    /// do. See `relay.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
+    /// The relay's own secret, which is not this machine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_token: Option<String>,
     #[serde(default = "default_port", skip_serializing_if = "is_default_port")]
     pub port: u16,
 }
@@ -212,10 +222,11 @@ impl Machine {
     /// Named for what a person would call it, which is the ssh alias when
     /// there is one.
     pub fn describe_route(&self) -> String {
-        match (&self.ssh, &self.url) {
-            (Some(ssh), _) => format!("ssh {ssh}"),
-            (None, Some(url)) => url.clone(),
-            (None, None) => "unreachable: no ssh target and no url".into(),
+        match (&self.ssh, &self.relay, &self.url) {
+            (Some(ssh), _, _) => format!("ssh {ssh}"),
+            (None, Some(relay), _) => format!("relay {relay}"),
+            (None, None, Some(url)) => url.clone(),
+            (None, None, None) => "unreachable: no ssh target, no relay and no url".into(),
         }
     }
 
@@ -247,6 +258,23 @@ impl Machine {
     }
 
     pub async fn reach(&self) -> Result<Reached> {
+        if let Some(relay) = &self.relay {
+            let token = self
+                .token
+                .clone()
+                .with_context(|| format!("{} is relayed and needs its host token", self.name))?;
+            let secret = self
+                .relay_token
+                .clone()
+                .with_context(|| format!("{} needs the relay's token", self.name))?;
+            let socket = crate::relay::reach(relay, &secret, &self.name).await?;
+            let (client, host) = Client::over(socket, &token).await?;
+            return Ok(Reached {
+                client,
+                host,
+                tunnel: None,
+            });
+        }
         let (url, token, tunnel) = self.route().await?;
         let (client, host) = Client::connect(&url, &token).await?;
         Ok(Reached {
@@ -271,6 +299,8 @@ mod tests {
                     ssh: Some(n.to_string()),
                     url: None,
                     token: None,
+                    relay: None,
+                    relay_token: None,
                     port: DEFAULT_PORT,
                 })
                 .collect(),

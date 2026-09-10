@@ -180,6 +180,13 @@ impl Host {
         &self.image
     }
 
+    /// What to call this machine somewhere that has to name it — a relay,
+    /// where the name is what a person types. The machine's own hostname,
+    /// because that is the one they already know it by.
+    pub fn describe_name(&self) -> String {
+        hostname()
+    }
+
     /// Where this host's keepers put their sockets.
     pub fn runtime(&self) -> &Path {
         &self.runtime

@@ -26,6 +26,7 @@ pub mod keeper;
 pub mod machines;
 pub mod marker;
 pub mod proto;
+pub mod relay;
 pub mod replay;
 pub mod secrets;
 pub mod serve;

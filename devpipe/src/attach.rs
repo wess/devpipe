@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use crate::client::{Client, Incoming, Outgoing, next_frame};
-use crate::proto::{self, Frame, FromClient, FromServer, Op, Pane, PaneEvent};
+use crate::proto::{self, Frame, FromClient, FromServer, HostInfo, Op, Pane, PaneEvent};
 use crate::term::{self, DETACH};
 
 /// The pty pane's channel. Fixed here only because this client opens exactly
@@ -25,14 +25,19 @@ enum Input {
     Detach,
 }
 
+/// Attach on a connection somebody else made.
+///
+/// The caller decides how the host was reached — ssh, a plain url, or a relay
+/// that introduced them — because those differ only in how the socket came to
+/// exist. Once it does, this is the same code either way, which is the point of
+/// the relay refusing to understand what it carries.
 pub async fn run(
-    url: &str,
-    token: &str,
+    mut client: Client,
+    host: HostInfo,
     environment: Option<String>,
     session: Option<String>,
     argv: Vec<String>,
 ) -> Result<()> {
-    let (mut client, host) = Client::connect(url, token).await?;
     eprintln!(
         "devpipe: {} on {} · {} backend · {} environment(s)",
         host.id,

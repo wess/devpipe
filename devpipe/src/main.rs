@@ -15,7 +15,7 @@ use tokio::net::TcpListener;
 
 use devpipe::backend::{Backend, docker::Docker, local::Local};
 use devpipe::host::{Host, state_dir};
-use devpipe::machines::{DEFAULT_PORT, Machine, Machines, Spot};
+use devpipe::machines::{DEFAULT_PORT, Machine, Machines, Reached, Spot};
 use devpipe::proto::{EnvInfo, FromClient, FromServer, HostInfo};
 use devpipe::tunnel::{self, Asked, Target};
 use devpipe::{attach, secrets, serve, term};
@@ -64,6 +64,12 @@ enum Command {
         url: Option<String>,
         #[arg(long)]
         token: Option<String>,
+        /// A relay this machine has dialled out to, for one you cannot ssh
+        /// into. Needs --token (the host's) and --relay-token (the relay's).
+        #[arg(long)]
+        relay: Option<String>,
+        #[arg(long)]
+        relay_token: Option<String>,
         /// The port the daemon listens on over there.
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
@@ -138,6 +144,17 @@ enum Command {
         /// Remembered, so it only has to be said once.
         #[arg(long)]
         image: Option<String>,
+        /// Dial out to a relay and stay enrolled there, so clients that cannot
+        /// reach this machine — a browser, anything behind NAT — can be
+        /// introduced to it. Runs alongside the local listener, not instead.
+        #[arg(long)]
+        relay: Option<String>,
+        /// The relay's secret, which is not this host's.
+        #[arg(long, env = "DEVPIPE_RELAY_TOKEN")]
+        relay_token: Option<String>,
+        /// What this host is called at the relay. Defaults to its hostname.
+        #[arg(long)]
+        relay_name: Option<String>,
         /// How much memory each environment may use: `1g`, `512m`. Unset means
         /// no ceiling, which is right on a workstation and wrong on a small
         /// machine — there, one unbounded build takes the daemon with it.
@@ -145,6 +162,18 @@ enum Command {
         memory: Option<String>,
         #[arg(long)]
         state_dir: Option<PathBuf>,
+    },
+    /// Introduce clients to machines that dialled out.
+    ///
+    /// For hosts a browser has to reach, or that nothing can ssh into. It
+    /// routes bytes and never learns what they mean.
+    Relay {
+        #[arg(long, default_value = "127.0.0.1:7456")]
+        bind: String,
+        /// Presented by machines enrolling and by clients asking. Generated and
+        /// printed when absent.
+        #[arg(long, env = "DEVPIPE_RELAY_TOKEN")]
+        token: Option<String>,
     },
     /// Hold one session's pty. Started by the daemon, never by a person: it
     /// reads what to run from its stdin and serves it on a unix socket.
@@ -205,8 +234,22 @@ async fn main() -> Result<()> {
             here,
             url,
             token,
+            relay,
+            relay_token,
             port,
-        } => add(name, ssh, here, url, token, port).await,
+        } => {
+            add(Adding {
+                name,
+                ssh,
+                here,
+                url,
+                token,
+                relay,
+                relay_token,
+                port,
+            })
+            .await
+        }
         Command::Forget { name } => {
             let mut machines = Machines::open(&state_dir());
             machines.forget(&name)?;
@@ -260,9 +303,32 @@ async fn main() -> Result<()> {
             token,
             backend,
             image,
+            relay,
+            relay_token,
+            relay_name,
             memory,
             state_dir: dir,
-        } => daemon(bind, token, backend, image, memory, dir).await,
+        } => {
+            daemon(Serving {
+                bind,
+                token,
+                backend,
+                image,
+                memory,
+                dir,
+                relay,
+                relay_token,
+                relay_name,
+            })
+            .await
+        }
+        Command::Relay { bind, token } => {
+            let token = token.unwrap_or_else(|| devpipe::host::random_id(24));
+            let listener = TcpListener::bind(&bind).await?;
+            eprintln!("devpipe: relay on ws://{}", listener.local_addr()?);
+            eprintln!("devpipe: DEVPIPE_RELAY_TOKEN={token}");
+            devpipe::relay::run(listener, devpipe::relay::Relay::new(token)).await
+        }
         Command::Keep { runtime_dir } => devpipe::keeper::run(runtime_dir).await,
     }
 }
@@ -516,16 +582,42 @@ async fn follow_once(
 
 // ------------------------------------------------------------------ machines
 
-async fn add(
+/// Everything `add` was given. A struct because seven positional arguments is
+/// a place mistakes live.
+struct Adding {
     name: String,
     ssh: Option<String>,
     here: bool,
     url: Option<String>,
     token: Option<String>,
+    relay: Option<String>,
+    relay_token: Option<String>,
     port: u16,
-) -> Result<()> {
+}
+
+async fn add(adding: Adding) -> Result<()> {
+    let Adding {
+        name,
+        ssh,
+        here,
+        url,
+        token,
+        relay,
+        relay_token,
+        port,
+    } = adding;
     let dir = state_dir();
-    let machine = if here {
+    let machine = if let Some(relay) = relay {
+        Machine {
+            name: name.clone(),
+            ssh: None,
+            url: None,
+            token: Some(token.context("a relayed machine needs --token, the host's own")?),
+            relay: Some(relay),
+            relay_token: Some(relay_token.context("a relayed machine needs --relay-token")?),
+            port,
+        }
+    } else if here {
         // The daemon on this very machine keeps its token in a file this user
         // can already read, so there is nothing to ask for.
         let path = dir.join("token");
@@ -536,6 +628,8 @@ async fn add(
             ssh: None,
             url: Some(format!("ws://127.0.0.1:{port}")),
             token: Some(token.trim().to_string()),
+            relay: None,
+            relay_token: None,
             port,
         }
     } else if let Some(url) = url {
@@ -544,6 +638,8 @@ async fn add(
             ssh: None,
             url: Some(url),
             token: Some(token.context("a --url needs a --token")?),
+            relay: None,
+            relay_token: None,
             port,
         }
     } else {
@@ -554,6 +650,8 @@ async fn add(
             name: name.clone(),
             url: None,
             token,
+            relay: None,
+            relay_token: None,
             port,
         }
     };
@@ -606,15 +704,23 @@ async fn open(path: Option<String>, argv: Vec<String>) -> Result<()> {
     };
     let machine = spot.machine(&machines)?;
 
-    let (url, token, tunnel) = machine.route().await?;
+    // Whatever it took to get here — an ssh forward, a plain url, a relay
+    // introduction — is settled by `reach`, and attaching cannot tell which.
+    let reached = machine.reach().await?;
+    let Reached {
+        client,
+        host,
+        tunnel,
+    } = reached;
     let ending = attach::run(
-        &url,
-        &token,
+        client,
+        host,
         spot.environment.clone(),
         spot.session.clone(),
         argv,
     )
     .await;
+    // Last: it is the thing holding the forward open, when there is one.
     drop(tunnel);
     ending
 }
@@ -757,14 +863,30 @@ async fn secret(command: SecretCommand, on: Option<String>) -> Result<()> {
 
 // -------------------------------------------------------------------- daemon
 
-async fn daemon(
+struct Serving {
     bind: String,
     token: Option<String>,
     backend: String,
     image: Option<String>,
     memory: Option<String>,
     dir: Option<PathBuf>,
-) -> Result<()> {
+    relay: Option<String>,
+    relay_token: Option<String>,
+    relay_name: Option<String>,
+}
+
+async fn daemon(serving: Serving) -> Result<()> {
+    let Serving {
+        bind,
+        token,
+        backend,
+        image,
+        memory,
+        dir,
+        relay,
+        relay_token,
+        relay_name,
+    } = serving;
     let backend: Arc<dyn Backend> = match backend.as_str() {
         "local" => Arc::new(Local),
         "docker" | "podman" => Arc::new(Docker::new(backend)),
@@ -787,5 +909,18 @@ async fn daemon(
     // Not the token itself. It is in a file the owner can read, and a daemon
     // that prints it puts it in every journal that scrapes the unit's output.
     eprintln!("devpipe: token in {}", dir.join("token").display());
+
+    // Alongside the listener, never instead of it. A host that can be reached
+    // directly should still be, because that path has nothing in the middle.
+    if let Some(relay) = relay {
+        let token = relay_token.context("--relay needs --relay-token")?;
+        let name = relay_name.unwrap_or_else(|| host.describe_name());
+        eprintln!("devpipe: enrolling at {relay} as {name}");
+        let enrolling = host.clone();
+        tokio::spawn(async move {
+            let _ = devpipe::relay::dial_out(relay, token, name, enrolling).await;
+        });
+    }
+
     serve::run(listener, host).await
 }

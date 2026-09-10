@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -26,7 +27,15 @@ const WRITE_BACKLOG: usize = 256;
 /// How long a refused client is given to read why before the socket goes.
 const FAREWELL: Duration = Duration::from_secs(2);
 
-type Incoming = SplitStream<WebSocketStream<TcpStream>>;
+/// Generic over what the websocket is carried on, because a host reaches its
+/// clients two ways: they connect to it, or — through a relay — it connected
+/// to them. The conversation is identical either way and this is the only line
+/// that has to know.
+type Incoming<S> = SplitStream<WebSocketStream<S>>;
+
+/// What both sides of that need to be.
+pub trait Carrier: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Carrier for S {}
 
 pub async fn run(listener: TcpListener, host: Arc<Host>) -> Result<()> {
     loop {
@@ -43,6 +52,11 @@ pub async fn run(listener: TcpListener, host: Arc<Host>) -> Result<()> {
 async fn serve(stream: TcpStream, host: Arc<Host>) -> Result<()> {
     stream.set_nodelay(true).ok();
     let ws = tokio_tungstenite::accept_async(stream).await?;
+    conversation(ws, host).await
+}
+
+/// One client, on whichever socket brought them.
+pub async fn conversation<S: Carrier>(ws: WebSocketStream<S>, host: Arc<Host>) -> Result<()> {
     let (mut sink, mut source) = ws.split();
     let (tx, mut rx) = mpsc::channel::<Frame>(WRITE_BACKLOG);
 
@@ -80,7 +94,11 @@ struct OpenPane {
     pump: JoinHandle<()>,
 }
 
-async fn converse(source: &mut Incoming, tx: mpsc::Sender<Frame>, host: &Arc<Host>) -> Result<()> {
+async fn converse<S: Carrier>(
+    source: &mut Incoming<S>,
+    tx: mpsc::Sender<Frame>,
+    host: &Arc<Host>,
+) -> Result<()> {
     let mut panes: HashMap<u32, OpenPane> = HashMap::new();
     let mut watching: Option<JoinHandle<()>> = None;
     let result = talk(source, &tx, host, &mut panes, &mut watching).await;
@@ -96,8 +114,8 @@ async fn converse(source: &mut Incoming, tx: mpsc::Sender<Frame>, host: &Arc<Hos
     result
 }
 
-async fn talk(
-    source: &mut Incoming,
+async fn talk<S: Carrier>(
+    source: &mut Incoming<S>,
     tx: &mpsc::Sender<Frame>,
     host: &Arc<Host>,
     panes: &mut HashMap<u32, OpenPane>,
@@ -539,7 +557,7 @@ async fn refuse(tx: &mpsc::Sender<Frame>, message: &str) {
         .await;
 }
 
-async fn next_frame(source: &mut Incoming) -> Result<Option<Frame>> {
+async fn next_frame<S: Carrier>(source: &mut Incoming<S>) -> Result<Option<Frame>> {
     while let Some(msg) = source.next().await {
         match msg? {
             Message::Binary(bytes) => return Ok(Some(Frame::decode(&bytes)?)),

@@ -155,6 +155,35 @@ else for one environment.
 Nothing about Devpipe requires that image. Any image with a shell works, and an
 image that sets `DEVPIPE_SHELL` gets that shell instead of `/bin/sh`.
 
+## Machines a browser can reach
+
+ssh is the default and the better path: nothing sits in the middle, and
+devpipe.com could disappear without a session dropping. A browser cannot open
+one, so a host that wants to be reachable from the web dials **out** instead:
+
+```sh
+# somewhere public
+devpipe relay --bind 0.0.0.0:7456
+
+# on the machine, alongside its own listener rather than instead of it
+devpipe serve --relay wss://relay.example.com --relay-token <t> --relay-name box-a
+
+# from anywhere
+dp add box-a --relay wss://relay.example.com --relay-token <t> --token <the host's>
+```
+
+The relay introduces a client to a machine and then copies bytes. It does not
+parse them and must not learn how — after the introduction the two ends speak
+the same protocol they always did, so adding a pane kind never touches it.
+Presence is the connection itself: no heartbeat, no timeout to tune, and a
+machine that drops stops being offered the moment it does.
+
+**Using the relay means trusting the relay, and ssh mode does not.** TLS
+terminates there, so a tampered-with relay can read the host token going past.
+That is the honest cost of the only design a browser can take part in, which is
+why this is a second path and not a replacement. Ending it properly means the
+client and the daemon doing their own handshake inside the tunnel.
+
 ## Sessions
 
 Each session is a *keeper*: a detached process holding the pty behind a unix
@@ -192,8 +221,11 @@ things below are known gaps rather than surprises.
   anything not pushed.
 - **One client at a time, really.** A second attach to the same session works
   but the two fight over the terminal size; there is no follower mode.
-- **No web or desktop client.** The pane protocol was built for them and `dp`
-  is the reference implementation, but they do not exist yet.
+- **No web or desktop client.** The pane protocol was built for them, the relay
+  gives them a way in, and `dp` is the reference implementation — but neither
+  client exists yet.
+- **The relay has one shared secret**, not accounts. Every machine and every
+  client presents the same token.
 
 ## Building it
 
