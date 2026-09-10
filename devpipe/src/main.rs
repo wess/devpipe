@@ -168,12 +168,11 @@ enum Command {
     /// For hosts a browser has to reach, or that nothing can ssh into. It
     /// routes bytes and never learns what they mean.
     Relay {
-        #[arg(long, default_value = "127.0.0.1:7456")]
-        bind: String,
-        /// Presented by machines enrolling and by clients asking. Generated and
-        /// printed when absent.
-        #[arg(long, env = "DEVPIPE_RELAY_TOKEN")]
-        token: Option<String>,
+        #[command(subcommand)]
+        command: RelayCommand,
+        /// Where its keys live. Beside the daemon's own state by default.
+        #[arg(long, global = true)]
+        state_dir: Option<PathBuf>,
     },
     /// Hold one session's pty. Started by the daemon, never by a person: it
     /// reads what to run from its stdin and serves it on a unix socket.
@@ -182,6 +181,34 @@ enum Command {
         #[arg(long)]
         runtime_dir: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum RelayCommand {
+    /// Run it.
+    Serve {
+        /// Bind loopback and put a TLS terminator in front, or bind publicly
+        /// and accept that machines dial it in the clear.
+        #[arg(long, default_value = "127.0.0.1:7456")]
+        bind: String,
+    },
+    /// Mint a key for an account. Shown once, and never again by anything —
+    /// what is kept is what it hashes to.
+    Grant {
+        #[arg(long)]
+        account: String,
+        /// `enrol` for a machine, `reach` for a person. They are stolen
+        /// differently, so they are separate.
+        #[arg(long, default_value = "reach")]
+        can: devpipe::keys::Can,
+        /// What it is for, for whoever has to decide later which to revoke.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// Take one back, by the prefix `keys` shows.
+    Revoke { prefix: String },
+    /// What has been granted. Never the keys themselves.
+    Keys,
 }
 
 #[derive(Subcommand)]
@@ -322,13 +349,7 @@ async fn main() -> Result<()> {
             })
             .await
         }
-        Command::Relay { bind, token } => {
-            let token = token.unwrap_or_else(|| devpipe::host::random_id(24));
-            let listener = TcpListener::bind(&bind).await?;
-            eprintln!("devpipe: relay on ws://{}", listener.local_addr()?);
-            eprintln!("devpipe: DEVPIPE_RELAY_TOKEN={token}");
-            devpipe::relay::run(listener, devpipe::relay::Relay::new(token)).await
-        }
+        Command::Relay { command, state_dir } => relaying(command, state_dir).await,
         Command::Keep { runtime_dir } => devpipe::keeper::run(runtime_dir).await,
     }
 }
@@ -858,6 +879,63 @@ async fn secret(command: SecretCommand, on: Option<String>) -> Result<()> {
         }
         Some(FromServer::Error { message }) => bail!("{message}"),
         _ => bail!("the machine said nothing useful"),
+    }
+}
+
+// --------------------------------------------------------------------- relay
+
+async fn relaying(command: RelayCommand, dir: Option<PathBuf>) -> Result<()> {
+    let dir = dir.unwrap_or_else(state_dir);
+    let mut keys = devpipe::keys::Keys::open(&dir);
+
+    match command {
+        RelayCommand::Grant { account, can, note } => {
+            let token = keys.grant(&account, can, &note)?;
+            // On its own line and nowhere else. This is the only time it
+            // exists outside whoever is about to paste it somewhere.
+            println!("{token}");
+            eprintln!("devpipe: granted to {account} for {}", can.as_str());
+            Ok(())
+        }
+        RelayCommand::Revoke { prefix } => {
+            match keys.revoke(&prefix)? {
+                0 => bail!("no key starts with {prefix}"),
+                1 => eprintln!("devpipe: revoked"),
+                n => eprintln!("devpipe: revoked {n} keys"),
+            }
+            Ok(())
+        }
+        RelayCommand::Keys => {
+            if keys.is_empty() {
+                println!("no keys yet · devpipe relay grant --account <name> --can enrol");
+                return Ok(());
+            }
+            println!("{:<14} {:<16} {:<7} NOTE", "KEY", "ACCOUNT", "CAN");
+            for key in keys.all() {
+                println!(
+                    "{:<14} {:<16} {:<7} {}",
+                    key.short(),
+                    key.account,
+                    key.can.as_str(),
+                    key.note
+                );
+            }
+            Ok(())
+        }
+        RelayCommand::Serve { bind } => {
+            if keys.is_empty() {
+                // Rather than starting something nothing can talk to and
+                // leaving the reason to be discovered from a refused socket.
+                bail!(
+                    "no keys yet, so nothing could enrol or connect: \
+                     `devpipe relay grant --account <name> --can enrol`"
+                );
+            }
+            let listener = TcpListener::bind(&bind).await?;
+            eprintln!("devpipe: relay on ws://{}", listener.local_addr()?);
+            eprintln!("devpipe: {} key(s) · {}", keys.all().len(), dir.display());
+            devpipe::relay::run(listener, devpipe::relay::Relay::new(keys)).await
+        }
     }
 }
 

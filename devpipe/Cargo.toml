@@ -22,6 +22,9 @@ serde_json = "1"
 # Constant-time token comparison. Hand-rolling it is the classic way to leak a
 # secret one byte at a time.
 subtle = "2"
+# The relay holds many people's keys, so it stores what a key hashes to rather
+# than the key. One machine's file is its own secret; a relay's is everyone's.
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "signal", "time", "process", "fs"] }
 tokio-tungstenite = "0.30"
 # The machine list is meant to be opened in an editor and understood, which

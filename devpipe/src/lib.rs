@@ -23,6 +23,7 @@ pub mod client;
 pub mod environment;
 pub mod host;
 pub mod keeper;
+pub mod keys;
 pub mod machines;
 pub mod marker;
 pub mod proto;

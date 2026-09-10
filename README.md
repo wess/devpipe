@@ -163,14 +163,31 @@ one, so a host that wants to be reachable from the web dials **out** instead:
 
 ```sh
 # somewhere public
-devpipe relay --bind 0.0.0.0:7456
+devpipe relay grant --account wess --can enrol --note "box-a"
+devpipe relay grant --account wess --can reach --note "laptop"
+devpipe relay serve --bind 0.0.0.0:7456
 
 # on the machine, alongside its own listener rather than instead of it
-devpipe serve --relay wss://relay.example.com --relay-token <t> --relay-name box-a
+devpipe serve --relay wss://relay.example.com --relay-token <enrol key> --relay-name box-a
 
 # from anywhere
-dp add box-a --relay wss://relay.example.com --relay-token <t> --token <the host's>
+dp add box-a --relay wss://relay.example.com --relay-token <reach key> --token <the host's>
 ```
+
+Keys belong to an account, and machines are scoped to it — two people can both
+have a `box-a` and neither can reach the other's by knowing what it is called.
+Asking for somebody else's gets the same sentence as asking for one that does
+not exist, because anything else answers "does this person have a box called
+that" for whoever asks.
+
+A machine's key and a person's key are separate, because they are stolen
+differently: an enrolment key sits on a box forever, and a box that is taken
+should not become a way into every other box its owner has.
+
+`devpipe relay keys` lists what has been granted and `revoke` takes one back by
+the prefix it shows. The keys themselves are stored as hashes: a machine's
+token file is that machine's own secret, but a relay's file is everybody's, so
+a copy of it is not enough to use.
 
 The relay introduces a client to a machine and then copies bytes. It does not
 parse them and must not learn how — after the introduction the two ends speak
@@ -224,8 +241,8 @@ things below are known gaps rather than surprises.
 - **No web or desktop client.** The pane protocol was built for them, the relay
   gives them a way in, and `dp` is the reference implementation — but neither
   client exists yet.
-- **The relay has one shared secret**, not accounts. Every machine and every
-  client presents the same token.
+- **The relay's accounts are local to it.** `devpipe relay grant` mints keys;
+  nothing ties them to a sign-in on a website yet.
 
 ## Building it
 

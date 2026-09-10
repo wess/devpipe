@@ -19,29 +19,62 @@ use harness::*;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
-const RELAY_TOKEN: &str = "relay-secret";
-
 struct Relaying {
     url: String,
     relay: Arc<Relay>,
+    dir: std::path::PathBuf,
+    /// What a machine enrols with, and what a person reaches with. Separate
+    /// keys because they are stolen differently.
+    enrol: String,
+    reach: String,
+}
+
+impl Drop for Relaying {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 async fn relay_on() -> Relaying {
-    let relay = Relay::new(RELAY_TOKEN.into());
+    relay_for(&["wess"]).await
+}
+
+/// A relay with a key pair per named account.
+async fn relay_for(accounts: &[&str]) -> Relaying {
+    let dir = std::env::temp_dir().join(format!("devpipe-relay-{}", devpipe::host::random_id(8)));
+    let mut keys = devpipe::keys::Keys::open(&dir);
+    let mut granted = Vec::new();
+    for account in accounts {
+        let enrol = keys
+            .grant(account, devpipe::keys::Can::Enrol, "test")
+            .unwrap();
+        let reach = keys
+            .grant(account, devpipe::keys::Can::Reach, "test")
+            .unwrap();
+        granted.push((enrol, reach));
+    }
+    let (enrol, reach) = granted[0].clone();
+    let relay = Relay::new(keys);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
     let serving = relay.clone();
     tokio::spawn(async move {
         let _ = relay::run(listener, serving).await;
     });
-    Relaying { url, relay }
+    Relaying {
+        url,
+        relay,
+        dir,
+        enrol,
+        reach,
+    }
 }
 
 /// Waits for the relay to have a machine, rather than sleeping for a guess.
 async fn wait_for(relay: &Arc<Relay>, name: &str) -> bool {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     while tokio::time::Instant::now() < deadline {
-        if relay.online().iter().any(|m| m == name) {
+        if relay.all_online().iter().any(|(_, m)| m == name) {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -58,14 +91,15 @@ async fn a_session_runs_through_the_relay() {
 
     let enrolling = host.host.clone();
     let url = relaying.url.clone();
+    let enrol = relaying.enrol.clone();
     tokio::spawn(async move {
-        let _ = relay::dial_out(url, RELAY_TOKEN.into(), "faraway".into(), enrolling).await;
+        let _ = relay::dial_out(url, enrol, "faraway".into(), enrolling).await;
     });
     assert!(wait_for(&relaying.relay, "faraway").await, "never enrolled");
 
     // From here nothing knows about a relay. The socket comes back and the
     // ordinary handshake happens on it, with the host's own token.
-    let socket = relay::reach(&relaying.url, RELAY_TOKEN, "faraway")
+    let socket = relay::reach(&relaying.url, &relaying.reach, "faraway")
         .await
         .unwrap();
     let (mut client, seen) = Client::over(socket, TOKEN).await.unwrap();
@@ -120,8 +154,9 @@ async fn a_relayed_machine_is_reached_like_any_other() {
 
     let enrolling = host.host.clone();
     let url = relaying.url.clone();
+    let enrol = relaying.enrol.clone();
     tokio::spawn(async move {
-        let _ = relay::dial_out(url, RELAY_TOKEN.into(), "byname".into(), enrolling).await;
+        let _ = relay::dial_out(url, enrol, "byname".into(), enrolling).await;
     });
     assert!(wait_for(&relaying.relay, "byname").await, "never enrolled");
 
@@ -131,7 +166,7 @@ async fn a_relayed_machine_is_reached_like_any_other() {
         url: None,
         token: Some(TOKEN.into()),
         relay: Some(relaying.url.clone()),
-        relay_token: Some(RELAY_TOKEN.into()),
+        relay_token: Some(relaying.reach.clone()),
         port: devpipe::machines::DEFAULT_PORT,
     };
 
@@ -147,7 +182,7 @@ async fn a_relayed_machine_is_reached_like_any_other() {
 #[tokio::test]
 async fn a_machine_that_is_not_there_is_said_so() {
     let relaying = relay_on().await;
-    let refused = relay::reach(&relaying.url, RELAY_TOKEN, "nowhere")
+    let refused = relay::reach(&relaying.url, &relaying.reach, "nowhere")
         .await
         .unwrap_err()
         .to_string();
@@ -158,7 +193,7 @@ async fn a_machine_that_is_not_there_is_said_so() {
 #[tokio::test]
 async fn the_relays_own_token_is_required() {
     let relaying = relay_on().await;
-    let refused = relay::reach(&relaying.url, "not-the-secret", "anything")
+    let refused = relay::reach(&relaying.url, "not-a-granted-key", "anything")
         .await
         .unwrap_err()
         .to_string();
@@ -172,7 +207,7 @@ async fn the_relays_own_token_is_required() {
         .send(Message::Binary(
             Frame::control(&relay::ToRelay::Enrol {
                 name: "impostor".into(),
-                token: "not-the-secret".into(),
+                token: "not-a-granted-key".into(),
             })
             .encode()
             .into(),
@@ -181,7 +216,13 @@ async fn the_relays_own_token_is_required() {
         .unwrap();
     // Whatever it says, it must not be online afterwards.
     let _ = socket.next().await;
-    assert!(!relaying.relay.online().iter().any(|m| m == "impostor"));
+    assert!(
+        !relaying
+            .relay
+            .all_online()
+            .iter()
+            .any(|(_, m)| m == "impostor")
+    );
 }
 
 /// A machine that goes away stops being offered, without a heartbeat or a
@@ -193,8 +234,9 @@ async fn presence_is_the_connection() {
 
     let enrolling = host.host.clone();
     let url = relaying.url.clone();
+    let enrol = relaying.enrol.clone();
     let dialling = tokio::spawn(async move {
-        let _ = relay::dial_out(url, RELAY_TOKEN.into(), "briefly".into(), enrolling).await;
+        let _ = relay::dial_out(url, enrol, "briefly".into(), enrolling).await;
     });
     assert!(wait_for(&relaying.relay, "briefly").await, "never enrolled");
 
@@ -202,14 +244,14 @@ async fn presence_is_the_connection() {
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     while tokio::time::Instant::now() < deadline {
-        if relaying.relay.online().is_empty() {
+        if relaying.relay.all_online().is_empty() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!(
         "the relay should have noticed it go: {:?}",
-        relaying.relay.online()
+        relaying.relay.all_online()
     );
 }
 
@@ -222,11 +264,79 @@ async fn one_name_belongs_to_one_machine() {
     for _ in 0..2 {
         let enrolling = host.host.clone();
         let url = relaying.url.clone();
+        let enrol = relaying.enrol.clone();
         tokio::spawn(async move {
-            let _ = relay::dial_out(url, RELAY_TOKEN.into(), "twice".into(), enrolling).await;
+            let _ = relay::dial_out(url, enrol, "twice".into(), enrolling).await;
         });
     }
     assert!(wait_for(&relaying.relay, "twice").await, "never enrolled");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(relaying.relay.online(), vec!["twice".to_string()]);
+    assert_eq!(relaying.relay.all_online().len(), 1);
+}
+
+/// Two people, one relay, and the same machine name. The reason a shared
+/// secret was not enough: with one, either of them could reach the other's box
+/// by knowing what it was called.
+#[tokio::test]
+async fn one_account_cannot_reach_anothers_machine() {
+    let dir = std::env::temp_dir().join(format!("devpipe-relay-{}", devpipe::host::random_id(8)));
+    let mut keys = devpipe::keys::Keys::open(&dir);
+    let wess_enrol = keys.grant("wess", devpipe::keys::Can::Enrol, "").unwrap();
+    let wess_reach = keys.grant("wess", devpipe::keys::Can::Reach, "").unwrap();
+    let other_reach = keys
+        .grant("someone", devpipe::keys::Can::Reach, "")
+        .unwrap();
+
+    let relay = Relay::new(keys);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let serving = relay.clone();
+    tokio::spawn(async move {
+        let _ = relay::run(listener, serving).await;
+    });
+
+    let host = local_host().await;
+    let enrolling = host.host.clone();
+    let dialling = url.clone();
+    tokio::spawn(async move {
+        let _ = relay::dial_out(dialling, wess_enrol, "box-a".into(), enrolling).await;
+    });
+    assert!(wait_for(&relay, "box-a").await, "never enrolled");
+
+    // Its owner reaches it.
+    assert!(relay::reach(&url, &wess_reach, "box-a").await.is_ok());
+
+    // Somebody else does not, and is told the same thing they would be told
+    // about a machine that does not exist — anything else answers "does wess
+    // have a box called this" for whoever asks.
+    let refused = relay::reach(&url, &other_reach, "box-a")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("box-a is not here"), "{refused}");
+
+    // And it is not in their listing either.
+    assert_eq!(
+        relay::online(&url, &other_reach).await.unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        relay::online(&url, &wess_reach).await.unwrap(),
+        vec!["box-a".to_string()]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An enrolment key lives on a machine forever. If a stolen one could also be
+/// used to reach every other machine its owner has, taking one box would take
+/// all of them.
+#[tokio::test]
+async fn a_machines_key_cannot_be_used_to_reach_machines() {
+    let relaying = relay_on().await;
+    let refused = relay::reach(&relaying.url, &relaying.enrol, "anything")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("unauthorized"), "{refused}");
 }

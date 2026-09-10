@@ -32,13 +32,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::host::random_id;
+use crate::keys::{Can, Keys};
 use crate::proto::Frame;
 
 /// How long a machine has to bring up a data connection after being asked.
@@ -93,32 +93,48 @@ struct Enrolled {
 }
 
 pub struct Relay {
-    token: String,
-    machines: Mutex<HashMap<String, Enrolled>>,
+    keys: Mutex<Keys>,
+    /// Keyed by account *and* name, so two people can both have a `box-a` and
+    /// neither can reach the other's by knowing what it is called.
+    machines: Mutex<HashMap<(String, String), Enrolled>>,
     /// Introductions in progress. A machine's data connection finds the client
     /// waiting for it by the word the relay gave them both.
     pending: Mutex<HashMap<String, oneshot::Sender<Socket>>>,
 }
 
 impl Relay {
-    pub fn new(token: String) -> Arc<Relay> {
+    pub fn new(keys: Keys) -> Arc<Relay> {
         Arc::new(Relay {
-            token,
+            keys: Mutex::new(keys),
             machines: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Constant time, for the same reason the host's is: the obvious `==` leaks
-    /// the secret one byte per reconnect to anyone who can time it.
-    fn authenticate(&self, presented: &str) -> bool {
-        self.token.as_bytes().ct_eq(presented.as_bytes()).into()
+    /// Which account a token speaks for, if any, for this purpose.
+    fn account_for(&self, token: &str, can: Can) -> Option<String> {
+        self.keys.lock().unwrap().account_for(token, can)
     }
 
-    pub fn online(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.machines.lock().unwrap().keys().cloned().collect();
+    /// What one account has here. Never what anyone else does.
+    pub fn online(&self, account: &str) -> Vec<String> {
+        let machines = self.machines.lock().unwrap();
+        let mut names: Vec<String> = machines
+            .keys()
+            .filter(|(owner, _)| owner == account)
+            .map(|(_, name)| name.clone())
+            .collect();
         names.sort();
         names
+    }
+
+    /// Every machine here, for the operator's own view. Not reachable over the
+    /// wire by anybody: nothing in the protocol returns this.
+    pub fn all_online(&self) -> Vec<(String, String)> {
+        let mut all: Vec<(String, String)> =
+            self.machines.lock().unwrap().keys().cloned().collect();
+        all.sort();
+        all
     }
 }
 
@@ -149,11 +165,11 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
 
     match asking {
         ToRelay::Enrol { name, token } => {
-            if !relay.authenticate(&token) {
+            let Some(account) = relay.account_for(&token, Can::Enrol) else {
                 refuse(&mut socket, "unauthorized").await;
                 bail!("unauthorized enrolment");
-            }
-            hold(socket, relay, name).await
+            };
+            hold(socket, relay, account, name).await
         }
         ToRelay::Offer { ticket } => {
             // No token: the ticket *is* the credential. This relay minted it
@@ -172,14 +188,14 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
             }
         }
         ToRelay::Online { token } => {
-            if !relay.authenticate(&token) {
+            let Some(account) = relay.account_for(&token, Can::Reach) else {
                 refuse(&mut socket, "unauthorized").await;
                 bail!("unauthorized");
-            }
+            };
             say(
                 &mut socket,
                 &FromRelay::Online {
-                    machines: relay.online(),
+                    machines: relay.online(&account),
                 },
             )
             .await?;
@@ -187,11 +203,11 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
             Ok(())
         }
         ToRelay::Reach { token, machine } => {
-            if !relay.authenticate(&token) {
+            let Some(account) = relay.account_for(&token, Can::Reach) else {
                 refuse(&mut socket, "unauthorized").await;
                 bail!("unauthorized");
-            }
-            introduce(socket, relay, machine).await
+            };
+            introduce(socket, relay, account, machine).await
         }
     }
 }
@@ -202,17 +218,18 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
 /// when it drops the entry goes, and the next client to ask is told the machine
 /// is not here. It is the one lesson worth taking from MQTT's last will: let
 /// the transport say it.
-async fn hold(socket: Socket, relay: Arc<Relay>, name: String) -> Result<()> {
+async fn hold(socket: Socket, relay: Arc<Relay>, account: String, name: String) -> Result<()> {
     let (mut sink, mut source) = socket.split();
     let (dial, mut asked) = mpsc::channel::<FromRelay>(CONTROL_BACKLOG);
 
+    let who = (account.clone(), name.clone());
     {
         let taken = {
             let mut machines = relay.machines.lock().unwrap();
-            if machines.contains_key(&name) {
+            if machines.contains_key(&who) {
                 true
             } else {
-                machines.insert(name.clone(), Enrolled { dial });
+                machines.insert(who.clone(), Enrolled { dial });
                 false
             }
         };
@@ -221,7 +238,7 @@ async fn hold(socket: Socket, relay: Arc<Relay>, name: String) -> Result<()> {
             // won a race, which is worse than refusing the second.
             let mut socket = sink.reunite(source).expect("halves of one socket");
             refuse(&mut socket, &format!("{name} is already enrolled")).await;
-            bail!("duplicate enrolment for {name}");
+            bail!("duplicate enrolment for {account}/{name}");
         }
     }
 
@@ -231,7 +248,7 @@ async fn hold(socket: Socket, relay: Arc<Relay>, name: String) -> Result<()> {
             .into(),
     ))
     .await?;
-    eprintln!("relay: {name} is here");
+    eprintln!("relay: {account}/{name} is here");
 
     loop {
         tokio::select! {
@@ -254,20 +271,30 @@ async fn hold(socket: Socket, relay: Arc<Relay>, name: String) -> Result<()> {
         }
     }
 
-    relay.machines.lock().unwrap().remove(&name);
-    eprintln!("relay: {name} is gone");
+    relay.machines.lock().unwrap().remove(&who);
+    eprintln!("relay: {account}/{name} is gone");
     Ok(())
 }
 
 /// Put a client through to a machine, then get out of the way.
-async fn introduce(mut client: Socket, relay: Arc<Relay>, machine: String) -> Result<()> {
+async fn introduce(
+    mut client: Socket,
+    relay: Arc<Relay>,
+    account: String,
+    machine: String,
+) -> Result<()> {
     let dial = {
         let machines = relay.machines.lock().unwrap();
-        machines.get(&machine).map(|m| m.dial.clone())
+        machines
+            .get(&(account.clone(), machine.clone()))
+            .map(|m| m.dial.clone())
     };
+    // The same sentence whether it belongs to somebody else or does not exist.
+    // Anything else answers "does this person have a machine called X" for
+    // anybody who can ask.
     let Some(dial) = dial else {
         refuse(&mut client, &format!("{machine} is not here")).await;
-        bail!("{machine} is not enrolled");
+        bail!("{account} has no machine called {machine}");
     };
 
     let ticket = random_id(16);
