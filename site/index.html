@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Devpipe: your agents keep working after you disconnect</title>
+<meta name="description" content="Run coding agents in persistent environments on a machine you own, then reconnect with dp attach after you close the laptop.">
+<meta name="theme-color" content="#0B0E14">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
+
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/plexmono-400.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/archivo.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+/* An amber CRT in a dark room, which is what a machine still working at 3am
+   actually looked like for thirty years. Green would be the terminal cliche
+   and the acid-on-black default at the same time. */
+:root {
+  --void:  #0B0E14;
+  --panel: #11151D;
+  --line:  #1D2431;
+  --text:  #C9D1DE;
+  --dim:   #6B7688;
+  --amber: #FFB454;
+  --ember: #FF7A45;
+  --good:  #7BD88F;
+
+  --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --gutter: clamp(1.25rem, 4vw, 4rem);
+  --rail: 2.75rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* The room the machine is sitting in: a single warm source, low and behind
+   the terminal, so the panel reads as the only thing switched on. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(80rem 50rem at 50% 78%, rgba(255,180,84,.09), transparent 62%),
+    radial-gradient(52rem 34rem at 82% 8%, rgba(255,122,69,.05), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+a { color: inherit; }
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* ---- top rail ------------------------------------------------------- */
+
+.rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--rail);
+  margin-top: clamp(1rem, 3vw, 1.75rem);
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.mark {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  color: var(--text);
+  letter-spacing: .2em;
+}
+.mark svg { width: 1.05rem; height: 1.05rem; display: block; }
+.rail-status { display: flex; align-items: center; gap: .5rem; }
+
+.dot {
+  width: .4rem; height: .4rem;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 0 0 rgba(123,216,143,.55);
+  animation: pulse 2.6s ease-out infinite;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(123,216,143,.5); }
+  70%  { box-shadow: 0 0 0 .5rem rgba(123,216,143,0); }
+  100% { box-shadow: 0 0 0 0 rgba(123,216,143,0); }
+}
+
+/* ---- hero ----------------------------------------------------------- */
+
+.hero { padding: clamp(1.25rem, 3.5vh, 2.25rem) 0 clamp(1.5rem, 4vh, 2.5rem); }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .74rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin: 0 0 clamp(.9rem, 2vw, 1.4rem);
+}
+
+h1 {
+  font-size: clamp(2.6rem, 8vw, 6.1rem);
+  font-weight: 800;
+  font-stretch: 112%;
+  line-height: .93;
+  letter-spacing: -.035em;
+  margin: 0;
+  text-wrap: balance;
+}
+/* The second line is the promise; the first is only the setup. Weighting
+   them the same would flatten the sentence. */
+h1 .quiet { color: var(--dim); font-weight: 600; font-stretch: 100%; display: block; }
+
+.lede {
+  font-family: 'Plex Mono', var(--mono);
+  font-size: clamp(.95rem, 1.55vw, 1.1rem);
+  line-height: 1.65;
+  color: var(--text);
+  max-width: 46rem;
+  margin: clamp(.9rem, 2vh, 1.25rem) 0 0;
+  text-wrap: pretty;
+}
+.lede strong { color: var(--amber); font-weight: 500; }
+
+/* ---- the run: the whole argument, performed -------------------------- */
+
+.stage {
+  position: relative;
+  margin: clamp(1.25rem, 3vh, 1.75rem) 0 0;
+}
+
+.term {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.03) inset,
+    0 2.5rem 5rem -1.5rem rgba(0,0,0,.75);
+  transition: opacity .5s ease, filter .5s ease;
+}
+.term.away { opacity: .34; filter: saturate(.35) blur(.6px); }
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .7rem 1rem;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--dim);
+  background: rgba(255,255,255,.014);
+}
+.term-bar .sid { color: var(--text); }
+.term-bar .spacer { flex: 1; }
+.uptime { color: var(--amber); font-variant-numeric: tabular-nums; }
+/* The bar carries the workspace, agent, and uptime at a glance. */
+.term-bar .branch { color: var(--dim); }
+.term-bar .state {
+  display: inline-flex;
+  align-items: center;
+  gap: .38rem;
+  color: var(--amber);
+}
+.term-bar .state::before {
+  content: "";
+  width: .42rem; height: .42rem;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.6s steps(1) infinite;
+}
+
+.term-body {
+  margin: 0;
+  padding: 1rem 1rem 1.35rem;
+  font-family: var(--mono);
+  font-size: clamp(.72rem, 1.5vw, .84rem);
+  line-height: 1.72;
+  height: clamp(9.5rem, 19vh, 12.5rem);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 2.2rem);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 2.2rem);
+}
+.term-body span { display: block; white-space: pre-wrap; word-break: break-word; }
+.t-dim  { color: var(--dim); }
+.t-ok   { color: var(--good); }
+.t-amb  { color: var(--amber); }
+.t-warn { color: var(--ember); }
+
+.caret {
+  display: inline-block;
+  width: .5em; height: 1em;
+  background: var(--amber);
+  vertical-align: -.14em;
+  animation: blink 1.1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* The overlay is the point: it says you are gone, while the counter behind
+   it keeps climbing. */
+.away-card {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: .6rem;
+  text-align: center;
+  font-family: var(--mono);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .45s ease;
+  z-index: 2;
+  background: rgba(11, 14, 20, .72);
+  backdrop-filter: blur(2px);
+  border-radius: 10px;
+}
+.away-card.show { opacity: 1; }
+.away-card .big {
+  font-size: clamp(.95rem, 2.2vw, 1.15rem);
+  color: var(--text);
+  letter-spacing: .01em;
+}
+.away-card .small {
+  font-size: .76rem;
+  color: var(--dim);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.away-card .counter { color: var(--amber); font-variant-numeric: tabular-nums; }
+
+.resumed {
+  margin: .85rem 0 0;
+  font-family: var(--mono);
+  font-size: .78rem;
+  color: var(--text);
+  min-height: 1.25rem;
+  opacity: 0;
+  transition: opacity .4s ease;
+}
+.resumed.show { opacity: 1; }
+.resumed b { color: var(--good); font-weight: 500; }
+
+/* ---- the brief ------------------------------------------------------ */
+
+/* Four facts, not a feature list. The page's job is still to make somebody
+   want to know more, so each one says a true thing and stops. */
+.brief { padding: clamp(2.25rem, 6vh, 3.5rem) 0 0; }
+
+.brief h2 {
+  font-family: var(--mono);
+  font-size: .74rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-weight: 400;
+  margin: 0 0 clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.facts {
+  display: grid;
+  /* Two columns, not three: four facts in a 2×2 read as a set, where 3+1
+     leaves the last one stranded in a row of its own.
+     `min(24rem, 100%)` rather than a bare 24rem: a track whose minimum
+     exceeds the container overflows it, and `overflow-x: hidden` on body
+     would hide that by clipping the text off a phone instead of reflowing. */
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  gap: clamp(1.1rem, 3vw, 2rem) clamp(1.5rem, 4vw, 3rem);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact { display: flex; gap: .9rem; align-items: baseline; }
+.fact .n {
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--amber);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.fact h3 {
+  font-size: 1.02rem;
+  font-weight: 700;
+  font-stretch: 106%;
+  letter-spacing: -.012em;
+  margin: 0 0 .35rem;
+  color: var(--text);
+}
+.fact p {
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+  color: var(--dim);
+  margin: 0;
+  text-wrap: pretty;
+}
+.fact strong { color: var(--text); font-weight: 400; }
+
+/* The one place the page points somewhere else. It sits after the facts
+   because it is the thing you can have today, not the thing being teased. */
+.aside {
+  margin: clamp(1.75rem, 4vh, 2.5rem) 0 0;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  border-radius: 0 7px 7px 0;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+  color: var(--dim);
+  max-width: 44rem;
+}
+.aside a { color: var(--amber); text-decoration: none; border-bottom: 1px solid rgba(255,180,84,.3); }
+.aside a:hover { border-bottom-color: var(--amber); }
+.aside b { color: var(--text); font-weight: 500; }
+
+.tease {
+  font-family: var(--mono);
+  font-size: .82rem;
+  color: var(--dim);
+  margin: clamp(1.5rem, 3.5vh, 2rem) 0 0;
+  max-width: 44rem;
+}
+
+/* ---- signup --------------------------------------------------------- */
+
+.signup { padding: clamp(2.5rem, 6vh, 4rem) 0 clamp(1.5rem, 4vh, 2.5rem); }
+.signup h2 {
+  font-size: clamp(1.4rem, 3.4vw, 2.1rem);
+  font-weight: 700;
+  font-stretch: 108%;
+  letter-spacing: -.02em;
+  margin: 0 0 .6rem;
+}
+.signup p {
+  font-family: var(--mono);
+  font-size: .86rem;
+  color: var(--dim);
+  margin: 0 0 1.5rem;
+  max-width: 34rem;
+}
+
+form { display: flex; gap: .6rem; flex-wrap: wrap; max-width: 34rem; }
+input[type=email] {
+  flex: 1 1 15rem;
+  min-width: 0;
+  padding: .85rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .88rem;
+}
+input[type=email]::placeholder { color: var(--dim); }
+input[type=email]:focus { border-color: var(--amber); outline: none; }
+
+button {
+  padding: .85rem 1.4rem;
+  background: var(--amber);
+  color: #10131A;
+  border: 0;
+  border-radius: 7px;
+  font-family: var(--mono);
+  font-size: .82rem;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform .12s ease, background .2s ease;
+}
+button:hover { background: #FFC46E; }
+button:active { transform: translateY(1px); }
+button[disabled] { opacity: .5; cursor: default; }
+
+.claim {
+  display: flex;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 .8rem;
+  font-family: var(--mono);
+  max-width: 34rem;
+}
+.claim .at, .claim .host { color: var(--dim); font-size: .88rem; flex: 0 0 auto; }
+.claim input {
+  flex: 1 1 auto;
+  min-width: 4rem;
+  border: 0;
+  background: transparent;
+  padding: .85rem .15rem;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: .88rem;
+}
+.claim input:focus { outline: none; }
+.claim:focus-within { border-color: var(--amber); }
+
+.availability {
+  font-family: var(--mono);
+  font-size: .76rem;
+  min-height: 1.2rem;
+  margin: .45rem 0 .6rem;
+  color: var(--dim);
+}
+.availability.free { color: var(--good); }
+.availability.taken { color: var(--ember); }
+
+.claim-row { display: flex; gap: .6rem; flex-wrap: wrap; max-width: 34rem; }
+.claim-row input { flex: 1 1 14rem; }
+
+.form-note {
+  font-family: var(--mono);
+  font-size: .78rem;
+  margin: .85rem 0 0;
+  min-height: 1.2rem;
+  color: var(--dim);
+}
+.form-note.ok { color: var(--good); }
+.form-note.bad { color: var(--ember); }
+
+footer nav { display: flex; gap: 1rem; }
+footer a { color: var(--dim); text-decoration: none; }
+footer a:hover { color: var(--text); }
+footer {
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0 2.5rem;
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--dim);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.foot-nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.foot-nav a { color: var(--dim); text-decoration: none; }
+.foot-nav a:hover { color: var(--amber); }
+
+@media (max-width: 34rem) {
+  .rail-status .label { display: none; }
+  form { flex-direction: column; }
+  button { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="rail">
+    <div class="mark">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M8 11l5 5-5 5" stroke="#FFB454" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17 21h7" stroke="#FFB454" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span>Devpipe</span>
+    </div>
+    <div class="rail-status">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="label">CLI beta</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">A machine that runs your coding agents</p>
+      <h1>
+        Close the lid.
+        <span class="quiet">It keeps building.</span>
+      </h1>
+      <p class="lede">
+        Start an agent in a persistent environment on a machine you own and
+        walk away. <strong>Nothing stops.</strong> Reconnect to the same session
+        with <code>dp attach</code> — from anywhere, on any laptop, days later.
+      </p>
+
+      <div class="stage">
+        <div class="term" id="term">
+          <div class="term-bar">
+            <span class="sid">devpipe-api</span>
+            <span class="branch">~/work/devpipe</span>
+            <span class="spacer"></span>
+            <span class="state">claude</span>
+            <span class="uptime" id="uptime">00:00:00</span>
+          </div>
+          <pre class="term-body" id="body" aria-live="off"></pre>
+        </div>
+
+        <div class="away-card" id="away">
+          <div class="small">You closed the tab</div>
+          <div class="big">The session is still going · <span class="counter" id="awaySecs">0s</span></div>
+        </div>
+
+        <p class="resumed" id="resumed"></p>
+      </div>
+    </section>
+
+    <section class="brief">
+      <h2>The shape of it</h2>
+      <ul class="facts">
+        <li class="fact">
+          <span class="n">01</span>
+          <div>
+            <h3>One machine, many environments</h3>
+            <p>
+              A box you already have, holding a project each: its own workspace,
+              its own ports, its own processes, toolchain already on it. About a
+              second to make one, not three minutes and a volume to reconcile.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">02</span>
+          <div>
+            <h3>The work outlives the connection</h3>
+            <p>
+              Agents run on the box, so closing the lid closes
+              <strong>nothing</strong>. What was running is still running.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">03</span>
+          <div>
+            <h3>It stands down when you do</h3>
+            <p>
+              Sleep an environment and its workspace is untouched; wake it and
+              your files are exactly where you left them. Nothing is paid for
+              twice, because it was one machine to begin with.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">04</span>
+          <div>
+            <h3>Keys stay out of your dotfiles</h3>
+            <p>
+              Secrets live on the machine, mode 0600, and are lent to an
+              environment at the moment a session starts. A key rotated this
+              morning reaches a container made last week. Remove one and the
+              next session never sees it.
+            </p>
+          </div>
+        </li>
+      </ul>
+
+      <p class="aside">
+        Everything is a path — <code>dp attach box/api</code> — so what you read
+        off the tree is what you type back. <code>dp</code> reaches your machine
+        over ssh and nothing else listens: no certificate to arrange, no token to
+        paste around, and this site is not in the path.
+      </p>
+
+      <p class="tease">
+        And when the agent says it is done, you can look:
+        <code>dp forward box/api 3000</code> brings its dev server to
+        <code>localhost:3000</code> on the machine you are sitting at.
+      </p>
+    </section>
+
+    <section class="brief">
+      <h2>Or run the whole thing yourself</h2>
+      <p class="lede">
+        Devpipe is <strong>Apache-2.0</strong>, and running it yourself is the
+        ordinary way to run it — one binary, a container runtime, and a box you
+        can ssh into. No crippled edition, no feature held back, and nothing
+        here that a hosted account unlocks.
+      </p>
+      <ul class="facts">
+        <li class="fact">
+          <span class="n">01</span>
+          <div>
+            <h3>A checked first launch</h3>
+            <p>
+              A setup token claims the owner safely. Then the provider token, a
+              domain, credential encryption, an SSH key and a spending cap are
+              checked rather than taken on trust.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">02</span>
+          <div>
+            <h3>One owner, admins under them</h3>
+            <p>
+              An admin invites people, suspends an abuser and reads the audit
+              log. An admin never sees a credential, which is the whole reason
+              the role exists.
+            </p>
+          </div>
+        </li>
+        <li class="fact">
+          <span class="n">03</span>
+          <div>
+            <h3>A cap, because the bill is yours</h3>
+            <p>
+              Machines and workspaces are accumulated over the provider's own
+              month. Past the cap nothing new starts and what is running goes
+              to sleep with its files intact.
+            </p>
+          </div>
+        </li>
+      </ul>
+
+      <p class="aside">
+        <a href="/self-host.html">What it takes to run one</a>: production
+        DigitalOcean, Runpod, local Docker, safe deployment, and an honest list
+        of what the hosted instance does that you would have to.
+      </p>
+    </section>
+
+    <section class="signup">
+      <h2>Claim your username</h2>
+      <p>
+        Names are first come, and yours becomes the address your machines answer
+        on. We will write once, when there is something to log into.
+      </p>
+      <form id="form" novalidate>
+        <div class="claim">
+          <span class="at">@</span>
+          <input type="text" id="username" name="username" placeholder="yourname"
+                 autocomplete="off" autocapitalize="none" spellcheck="false"
+                 maxlength="32" required aria-label="Username">
+          <span class="host">.devpipe.com</span>
+        </div>
+        <p class="availability" id="availability" role="status"></p>
+        <div class="claim-row">
+          <input type="email" id="email" name="email" placeholder="you@example.com"
+                 autocomplete="email" spellcheck="false" required aria-label="Email address">
+          <button type="submit" id="submit">Claim it</button>
+        </div>
+      </form>
+      <p class="form-note" id="note" role="status"></p>
+    </section>
+
+  </main>
+
+  <footer>
+    <span>Devpipe</span>
+    <nav class="foot-nav" aria-label="Site">
+      <!-- The only route from the lander into the app. Without it the app is
+           reachable only by knowing the path to type, which is fine while the
+           audience is one person and not once anybody has an account. -->
+      <a href="/terminals">Sign in</a>
+      <a href="/self-host.html">Self-host</a>
+      <a href="https://devpipe.com/install.sh">CLI</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html">Acceptable use</a>
+    </nav>
+    <span>Built on Sinclair · wess.io</span>
+  </footer>
+</div>
+
+<script src="/lander.js" defer></script>
+</body>
+</html>

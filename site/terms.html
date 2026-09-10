@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terms of service (draft) — Devpipe</title>
+<meta name="description" content="Draft terms of service for Devpipe. Not reviewed by a lawyer and not in force.">
+<meta name="theme-color" content="#0B0E14">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
+
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/plexmono-400.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/archivo.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+/* Same room, same lamp as the lander. A legal page that looks like a different
+   product reads as boilerplate someone bought. */
+:root {
+  --void:  #0B0E14;
+  --panel: #11151D;
+  --line:  #1D2431;
+  --text:  #C9D1DE;
+  --dim:   #6B7688;
+  --amber: #FFB454;
+  --ember: #FF7A45;
+  --good:  #7BD88F;
+
+  --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --gutter: clamp(1.25rem, 4vw, 4rem);
+  --rail: 2.75rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(80rem 50rem at 50% 78%, rgba(255,180,84,.07), transparent 62%),
+    radial-gradient(52rem 34rem at 82% 8%, rgba(255,122,69,.04), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* ---- rail ------------------------------------------------------------ */
+
+.rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  min-height: var(--rail);
+  margin-top: clamp(1rem, 3vw, 1.75rem);
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.mark {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  color: var(--text);
+  letter-spacing: .2em;
+  text-decoration: none;
+}
+.mark svg { width: 1.05rem; height: 1.05rem; display: block; }
+.rail-nav { display: flex; gap: 1.1rem; flex-wrap: wrap; }
+.rail-nav a { text-decoration: none; color: var(--dim); }
+.rail-nav a:hover { color: var(--text); }
+.rail-nav a[aria-current] { color: var(--amber); }
+
+/* ---- the draft warning ------------------------------------------------ */
+
+.banner {
+  margin: clamp(1.5rem, 4vh, 2.5rem) 0 0;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(255,122,69,.42);
+  border-radius: 8px;
+  background: rgba(255,122,69,.06);
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+}
+.banner b {
+  display: block;
+  color: var(--ember);
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  font-size: .74rem;
+  margin-bottom: .45rem;
+}
+
+/* ---- head ------------------------------------------------------------- */
+
+.head { padding: clamp(1.75rem, 5vh, 2.75rem) 0 0; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .74rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin: 0 0 .9rem;
+}
+h1 {
+  font-size: clamp(2.1rem, 5.6vw, 3.4rem);
+  font-weight: 800;
+  font-stretch: 110%;
+  line-height: 1;
+  letter-spacing: -.03em;
+  margin: 0;
+  text-wrap: balance;
+}
+.meta {
+  font-family: var(--mono);
+  font-size: .76rem;
+  color: var(--dim);
+  margin: 1rem 0 0;
+  line-height: 1.8;
+}
+.lede {
+  font-size: clamp(1rem, 1.6vw, 1.12rem);
+  line-height: 1.7;
+  margin: 1.35rem 0 0;
+  max-width: 44rem;
+  text-wrap: pretty;
+}
+
+/* ---- contents --------------------------------------------------------- */
+
+.toc {
+  list-style: none;
+  margin: clamp(1.75rem, 4vh, 2.5rem) 0 0;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .8rem;
+  columns: 2;
+  column-gap: 2rem;
+}
+.toc li { margin: 0 0 .5rem; break-inside: avoid; }
+.toc a { color: var(--dim); text-decoration: none; }
+.toc a:hover { color: var(--amber); }
+
+/* ---- prose ------------------------------------------------------------ */
+
+section { margin: clamp(2.25rem, 6vh, 3.25rem) 0 0; scroll-margin-top: 1.5rem; }
+h2 {
+  font-size: clamp(1.15rem, 2.4vw, 1.5rem);
+  font-weight: 700;
+  font-stretch: 106%;
+  letter-spacing: -.015em;
+  line-height: 1.25;
+  margin: 0 0 .9rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+h2 .n {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: .74rem;
+  font-weight: 400;
+  letter-spacing: .12em;
+  color: var(--amber);
+  margin-right: .7rem;
+  vertical-align: .18em;
+}
+h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 1.6rem 0 .5rem;
+}
+p { margin: 0 0 .95rem; max-width: 44rem; text-wrap: pretty; }
+ul { margin: 0 0 .95rem; padding-left: 1.1rem; max-width: 44rem; }
+li { margin: 0 0 .5rem; }
+li::marker { color: var(--dim); }
+strong { color: var(--amber); font-weight: 600; }
+code, .m { font-family: var(--mono); font-size: .88em; color: var(--text); }
+
+.note {
+  margin: 1.25rem 0;
+  padding: .95rem 1.15rem;
+  border-left: 2px solid var(--line);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.75;
+  max-width: 44rem;
+}
+
+/* Placeholders are marked so a reviewer can find every one of them by eye
+   rather than by trusting a list. */
+.ph {
+  display: inline;
+  font-family: var(--mono);
+  font-size: .82em;
+  color: var(--ember);
+  background: rgba(255,122,69,.08);
+  border: 1px dashed rgba(255,122,69,.45);
+  border-radius: 4px;
+  padding: .05em .4em;
+}
+
+/* ---- footer ----------------------------------------------------------- */
+
+footer {
+  margin-top: clamp(3rem, 8vh, 4.5rem);
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0 2.5rem;
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--dim);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem 1.5rem;
+  flex-wrap: wrap;
+}
+.foot-nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.foot-nav a { color: var(--dim); text-decoration: none; }
+.foot-nav a:hover { color: var(--amber); }
+
+@media (max-width: 34rem) {
+  .toc { columns: 1; }
+  .rail { font-size: .68rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="rail">
+    <a class="mark" href="/">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M8 11l5 5-5 5" stroke="#FFB454" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17 21h7" stroke="#FFB454" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span>Devpipe</span>
+    </a>
+    <nav class="rail-nav" aria-label="Documents">
+      <a href="/terms.html" aria-current="page">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html">Acceptable use</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="banner" role="note">
+      <b>Draft — not in force</b>
+      No lawyer has read this. It binds nobody, it is not a contract, and it will
+      change. It is published now so you can see what we intend to agree to
+      before there is anything to buy. Passages a lawyer has to decide are marked
+      <span class="ph">like this</span>.
+    </div>
+
+    <div class="head">
+      <p class="eyebrow">Draft document</p>
+      <h1>Terms of service</h1>
+      <p class="meta">
+        Drafted 7 August 2026 · Effective: not yet<br>
+        Operator: <span class="ph">legal entity name and registered address</span>
+      </p>
+      <p class="lede">
+        Devpipe rents you a Linux machine that keeps running after you close the
+        lid. These terms cover what we owe you, what you owe us, and what happens
+        when it goes wrong. They are meant to be read, not skipped.
+      </p>
+    </div>
+
+    <ol class="toc">
+      <li><a href="#what">01 · What Devpipe is</a></li>
+      <li><a href="#account">02 · Your account</a></li>
+      <li><a href="#cost">03 · What it costs</a></li>
+      <li><a href="#cancel">04 · Stopping</a></li>
+      <li><a href="#yours">05 · What you run</a></li>
+      <li><a href="#access">06 · Our access to your box</a></li>
+      <li><a href="#availability">07 · Availability</a></li>
+      <li><a href="#termination">08 · Suspension and termination</a></li>
+      <li><a href="#warranty">09 · No warranty</a></li>
+      <li><a href="#liability">10 · Limitation of liability</a></li>
+      <li><a href="#changes">11 · Changes to these terms</a></li>
+      <li><a href="#law">12 · Governing law</a></li>
+      <li><a href="#contact">13 · Contact</a></li>
+    </ol>
+
+    <section id="what">
+      <h2><span class="n">01</span> What Devpipe is</h2>
+      <p>
+        Devpipe runs virtual machines — we call them <strong>boxes</strong> — on
+        hardware rented from DigitalOcean. When you create a box we provision a
+        machine in the region and size you picked, install the tools you chose,
+        give it a hostname under <code>devpipe.com</code> with its own
+        certificate, and hand you a terminal you can reach from the web app or
+        the Devpipe CLI.
+      </p>
+      <p>
+      </p>
+      <p>
+        Devpipe does not supply the coding agents. Claude Code, Codex CLI and
+        Gemini CLI are installed on your box because you asked for them, and you
+        sign into them with your own account. Your agreement with those vendors is
+        yours. If your arrangement with them lapses the box keeps running and
+        the agent stops working, and that is not a fault of the service.
+      </p>
+    </section>
+
+    <section id="account">
+      <h2><span class="n">02</span> Your account</h2>
+      <ul>
+        <li>Give a working email address. It is how we reach you about suspension and anything urgent.</li>
+        <li>Passwords are at least 12 characters. Keep yours to yourself; sessions are per device and you can end any of them.</li>
+        <li>A sign-in lasts 30 days unless you sign out or change your password, which ends every other session.</li>
+        <li>You are responsible for everything done under your account, including everything an agent does after you start it.</li>
+        <li>While signups are invite-only, an invite code is single use and not transferable, and we can withdraw one that has not been used.</li>
+      </ul>
+    </section>
+
+    <section id="cost">
+      <h2><span class="n">03</span> What it costs</h2>
+      <p>
+        <strong>Nothing is sold here and nothing is charged.</strong> Devpipe
+        creates machines on a DigitalOcean account and DigitalOcean invoices
+        whoever owns that account. There is no payment processor in this
+        service, no card on file, and no subscription.
+      </p>
+      <ul>
+        <li>On an instance you run yourself, that account is yours: you pay DigitalOcean directly, at their prices, exactly as if you had created the machines in their console.</li>
+        <li>On an instance somebody else runs, the machines are on <em>their</em> account and their arrangement with you is theirs to state — this document does not create one.</li>
+        <li>The software meters what every box and every volume costs at the provider's own prices, shows it to the person who created them, and shows the instance total to whoever runs it.</li>
+        <li>An instance can be given a monthly ceiling. Past it nothing new starts and running machines are put to sleep with their files intact.</li>
+      </ul>
+      <p>
+        A box is rented compute either way. You are not buying hardware, and you
+        are not buying a licence to the software — that is
+        <a href="https://github.com/wess/devpipe">Apache-2.0</a>, and you may run
+        it yourself.
+      </p>
+    </section>
+
+    <section id="cancel">
+      <h2><span class="n">04</span> Stopping</h2>
+      <p>
+        <strong>There is nothing to cancel.</strong> A box stops costing money
+        the moment it is asleep or destroyed, because the only thing being paid
+        for is a machine at the provider.
+      </p>
+      <ul>
+        <li><b>Sleeping</b> releases the droplet and keeps the workspace. The files come back when the box wakes. This is what the idle sweep and the spending cap do, and it is why a box carrying no workspace is never touched by either.</li>
+        <li><b>Destroying</b> a box destroys its disk. Anything not on a workspace is gone, and neither we nor the provider can get it back — copy what you want to keep first.</li>
+        <li><b>A workspace</b> keeps costing while it exists, whether or not a box is attached. That is the point of it. Delete it when the work is done.</li>
+      </ul>
+      <p>
+        To close an account entirely, see <a href="/privacy.html#deletion">deletion</a>
+        in the privacy policy.
+      </p>
+    </section>
+
+    <section id="yours">
+      <h2><span class="n">05</span> What you run is yours, and it is your responsibility</h2>
+      <p>
+        Your code, your data, and whatever your agents produce belong to you. We
+        claim no ownership of them and take no licence beyond what running the
+        machine technically requires.
+      </p>
+      <p>
+        The other half of that: you are responsible for what runs on your box
+        whether you typed it or an agent did. Starting an autonomous process and
+        giving it credentials is a decision you made. "The agent did it" is not a
+        defence with us, and it will not be one with anyone else either.
+      </p>
+      <ul>
+        <li>You must have the rights to everything you put on the box, and you must honour the licences of anything you install.</li>
+        <li>The <a href="/aup.html">acceptable use policy</a> forms part of these terms. Breaking it is breaking these terms.</li>
+        <li>Anything you send to a coding agent goes to that vendor under their terms. We are not in that path.</li>
+      </ul>
+    </section>
+
+    <section id="access">
+      <h2><span class="n">06</span> Our access to your box</h2>
+      <p>
+        Boxes run on infrastructure we administer, and we hold root on them by
+        construction. Pretending otherwise would be a lie, so: we can read your
+        disk. We will only do it when we have to — to fix a fault you have asked
+        us to fix, to answer a credible abuse report, or where the law requires
+        it. Where we can tell you first, we will.
+      </p>
+      <p>
+        That access exists whether we use it or not. If it is unacceptable for
+        some particular data, do not put that data on a box.
+      </p>
+    </section>
+
+    <section id="availability">
+      <h2><span class="n">07</span> Availability</h2>
+      <p>
+        A box is one virtual machine. There is no failover and there are no
+        backups unless you make them. A host failure can take the machine and its
+        disk with it, and that is a real possibility rather than a theoretical
+        one.
+      </p>
+      <ul>
+        <li>There is no service level agreement. <span class="ph">Decide whether to offer one, and what credits it carries</span>.</li>
+        <li>Maintenance that needs a reboot gets notice where we control the timing. Provider maintenance is not always ours to schedule.</li>
+        <li>Back up work that matters. Push to a remote you control.</li>
+      </ul>
+    </section>
+
+    <section id="termination">
+      <h2><span class="n">08</span> Suspension and termination</h2>
+      <p>We can suspend or destroy a box, or close an account, when:</p>
+      <ul>
+        <li>the acceptable use policy is being broken;</li>
+        <li>payment has failed and stayed failed past the grace period;</li>
+        <li>our infrastructure provider requires it, which they can and do; or</li>
+        <li>letting it continue would put other customers' boxes at risk.</li>
+      </ul>
+      <p>
+        Where a box is actively harming somebody else, we act first and explain
+        afterwards. Everywhere else we will write to you first and give you a
+        chance to fix it.
+      </p>
+      <p>
+        You can close your account whenever you like. On termination for any
+        reason boxes are destroyed and their disks are not recoverable.
+      </p>
+    </section>
+
+    <section id="warranty">
+      <h2><span class="n">09</span> No warranty</h2>
+      <p>
+        The service is provided as it is. We do not promise it will be
+        uninterrupted or free of faults, we do not promise it fits your purpose,
+        and we make no promise at all about what an agent running on your box
+        produces — read its output before you trust it. To the fullest extent the
+        law allows, implied warranties and conditions are excluded.
+      </p>
+    </section>
+
+    <section id="liability">
+      <h2><span class="n">10</span> Limitation of liability</h2>
+      <ul>
+        <li>We are not liable for lost work, lost profit, lost data, or any indirect or consequential loss.</li>
+        <li>Our total liability for any claim is capped at what you paid us for the box in question in the <span class="ph">3 or 12</span> months before the claim arose.</li>
+        <li>
+          Nothing here limits liability that cannot lawfully be limited — death or
+          personal injury caused by negligence, fraud, and whatever else your
+          jurisdiction protects. <span class="ph">A lawyer should confirm the carve-outs for every place we will sell into</span>.
+        </li>
+      </ul>
+    </section>
+
+    <section id="changes">
+      <h2><span class="n">11</span> Changes to these terms</h2>
+      <p>
+        We can change these terms. A material change gets an email to your account
+        address at least <span class="ph">notice period</span> before it takes
+        effect. If you do not accept it, destroy your boxes and close your account
+        before that date; continuing to use the service after it is acceptance.
+      </p>
+    </section>
+
+    <section id="law">
+      <h2><span class="n">12</span> Governing law and disputes</h2>
+      <p>
+        <span class="ph">PLACEHOLDER — governing law, jurisdiction, venue, and whether disputes go to arbitration.</span>
+      </p>
+      <div class="note">
+        This is not boilerplate to fill in last. It decides where you would have to
+        sue us and where we would have to defend, and it has to match where the
+        operating entity is actually incorporated and where customers are. Leaving
+        it blank is deliberate: nobody should invent it.
+      </div>
+    </section>
+
+    <section id="contact">
+      <h2><span class="n">13</span> Contact</h2>
+      <p>
+        <span class="ph">Legal entity, registered address, company number</span><br>
+        <span class="ph">legal@devpipe.com — mailbox to be created</span>
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <span>Devpipe · draft documents</span>
+    <nav class="foot-nav" aria-label="Site">
+      <a href="/">Home</a>
+      <a href="/self-host.html">Self-host</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html">Acceptable use</a>
+    </nav>
+  </footer>
+</div>
+
+</body>
+</html>

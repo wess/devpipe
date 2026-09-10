@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Devpipe</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0B0E14">
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+<style>
+  /* The app's own origin, deliberately: the session cookie is host-only, so
+     putting it here is what keeps it off the lander and off every *.devpipe.com
+     box. See src/auth/cookie.ts. */
+  body { background: var(--void); color: var(--text); font-family: var(--display); }
+  .shell { max-width: 42rem; margin: 0 auto; padding: clamp(2rem, 8vh, 6rem) 1.25rem 4rem; }
+  .mark { font-weight: 700; letter-spacing: -0.02em; margin-bottom: 2.5rem; }
+  .mark span { color: var(--amber); }
+  h1 { font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -0.02em; margin: 0 0 0.5rem; }
+  .lede { color: var(--dim); margin: 0 0 2rem; }
+  label { display: block; font-size: 0.85rem; color: var(--dim); margin: 0 0 0.35rem; }
+  input { width: 100%; padding: 0.7rem 0.8rem; margin-bottom: 1rem; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 6px; color: var(--text);
+          font: inherit; }
+  input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+  button { padding: 0.7rem 1.2rem; background: var(--amber); color: var(--void);
+           border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  .quiet { background: none; color: var(--dim); padding: 0; font-weight: 400;
+           text-decoration: underline; }
+  .row { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+        padding: 0.9rem 1rem; overflow-x: auto; font-family: var(--mono); font-size: 0.85rem;
+        color: var(--text); }
+  ol { padding-left: 1.2rem; }
+  li { margin-bottom: 1.5rem; }
+  .note { color: var(--dim); font-size: 0.9rem; border-left: 2px solid var(--line);
+          padding-left: 1rem; }
+  .bad { color: var(--ember); min-height: 1.2rem; font-size: 0.9rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="mark">dev<span>pipe</span></div>
+
+  <!-- Both states ship in one document. The page decides which to show from
+       /api/auth/me, so a signed-in person never sees a sign-in form flash past
+       on the way to the thing they came for. -->
+  <section id="signin" hidden>
+    <h1>Sign in</h1>
+    <p class="lede">Your account. Your machines stay yours.</p>
+    <form id="form">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <p class="bad" id="error" role="alert"></p>
+      <button id="submit" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <section id="connect" hidden>
+    <div class="row">
+      <h1>Connect a machine</h1>
+      <button class="quiet" id="signout" type="button">Sign out</button>
+    </div>
+    <p class="lede">Signed in as <span id="who"></span>.</p>
+
+    <ol>
+      <li>
+        <p>On any Linux box you can ssh into — a $12 VPS is enough:</p>
+        <pre>ssh box 'curl -fsSL https://devpipe.com/provision.sh | sh'</pre>
+      </li>
+      <li>
+        <p>On your laptop:</p>
+        <pre>curl -fsSL https://devpipe.com/install.sh | sh
+dp add box
+dp new box/api --repo git@github.com:you/api.git --port 3000
+dp attach box/api</pre>
+      </li>
+    </ol>
+
+    <p class="note">
+      There is no machine list here yet, and that is not an omission we are
+      hiding. Your daemon listens on its own loopback and <code>dp</code>
+      reaches it over ssh — this site is not in that path, and cannot be.
+      What an account buys today is somewhere to keep that true when machines
+      can report in on their own.
+    </p>
+  </section>
+
+  <noscript>
+    <h1>Sign in</h1>
+    <p class="lede">This page needs JavaScript. The install commands do not:</p>
+    <pre>ssh box 'curl -fsSL https://devpipe.com/provision.sh | sh'
+curl -fsSL https://devpipe.com/install.sh | sh</pre>
+  </noscript>
+</div>
+<script src="/app/app.js"></script>
+</body>
+</html>

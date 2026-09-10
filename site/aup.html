@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Acceptable use policy (draft) — Devpipe</title>
+<meta name="description" content="Draft acceptable use policy for Devpipe: what you may not run on a box, and why the rules exist. Not reviewed by a lawyer and not in force.">
+<meta name="theme-color" content="#0B0E14">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230B0E14'/><path d='M8 11l5 5-5 5' stroke='%23FFB454' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M17 21h7' stroke='%23FFB454' stroke-width='2.5' stroke-linecap='round'/></svg>">
+
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/plexmono-400.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/archivo.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/fonts/plexmono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  --void:  #0B0E14;
+  --panel: #11151D;
+  --line:  #1D2431;
+  --text:  #C9D1DE;
+  --dim:   #6B7688;
+  --amber: #FFB454;
+  --ember: #FF7A45;
+  --good:  #7BD88F;
+
+  --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --gutter: clamp(1.25rem, 4vw, 4rem);
+  --rail: 2.75rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(80rem 50rem at 50% 78%, rgba(255,180,84,.07), transparent 62%),
+    radial-gradient(52rem 34rem at 82% 8%, rgba(255,122,69,.04), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  min-height: var(--rail);
+  margin-top: clamp(1rem, 3vw, 1.75rem);
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.mark {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  color: var(--text);
+  letter-spacing: .2em;
+  text-decoration: none;
+}
+.mark svg { width: 1.05rem; height: 1.05rem; display: block; }
+.rail-nav { display: flex; gap: 1.1rem; flex-wrap: wrap; }
+.rail-nav a { text-decoration: none; color: var(--dim); }
+.rail-nav a:hover { color: var(--text); }
+.rail-nav a[aria-current] { color: var(--amber); }
+
+.banner {
+  margin: clamp(1.5rem, 4vh, 2.5rem) 0 0;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(255,122,69,.42);
+  border-radius: 8px;
+  background: rgba(255,122,69,.06);
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.7;
+}
+.banner b {
+  display: block;
+  color: var(--ember);
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  font-size: .74rem;
+  margin-bottom: .45rem;
+}
+
+.head { padding: clamp(1.75rem, 5vh, 2.75rem) 0 0; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .74rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin: 0 0 .9rem;
+}
+h1 {
+  font-size: clamp(2.1rem, 5.6vw, 3.4rem);
+  font-weight: 800;
+  font-stretch: 110%;
+  line-height: 1;
+  letter-spacing: -.03em;
+  margin: 0;
+  text-wrap: balance;
+}
+.meta {
+  font-family: var(--mono);
+  font-size: .76rem;
+  color: var(--dim);
+  margin: 1rem 0 0;
+  line-height: 1.8;
+}
+.lede {
+  font-size: clamp(1rem, 1.6vw, 1.12rem);
+  line-height: 1.7;
+  margin: 1.35rem 0 0;
+  max-width: 44rem;
+  text-wrap: pretty;
+}
+
+.toc {
+  list-style: none;
+  margin: clamp(1.75rem, 4vh, 2.5rem) 0 0;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .8rem;
+  columns: 2;
+  column-gap: 2rem;
+}
+.toc li { margin: 0 0 .5rem; break-inside: avoid; }
+.toc a { color: var(--dim); text-decoration: none; }
+.toc a:hover { color: var(--amber); }
+
+section { margin: clamp(2.25rem, 6vh, 3.25rem) 0 0; scroll-margin-top: 1.5rem; }
+h2 {
+  font-size: clamp(1.15rem, 2.4vw, 1.5rem);
+  font-weight: 700;
+  font-stretch: 106%;
+  letter-spacing: -.015em;
+  line-height: 1.25;
+  margin: 0 0 .9rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+h2 .n {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: .74rem;
+  font-weight: 400;
+  letter-spacing: .12em;
+  color: var(--amber);
+  margin-right: .7rem;
+  vertical-align: .18em;
+}
+h3 { font-size: 1rem; font-weight: 700; margin: 1.6rem 0 .5rem; }
+p { margin: 0 0 .95rem; max-width: 44rem; text-wrap: pretty; }
+ul { margin: 0 0 .95rem; padding-left: 1.1rem; max-width: 44rem; }
+li { margin: 0 0 .5rem; }
+li::marker { color: var(--dim); }
+strong { color: var(--amber); font-weight: 600; }
+code, .m { font-family: var(--mono); font-size: .88em; color: var(--text); }
+
+.note {
+  margin: 1.25rem 0;
+  padding: .95rem 1.15rem;
+  border-left: 2px solid var(--line);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.75;
+  max-width: 44rem;
+}
+
+.ph {
+  display: inline;
+  font-family: var(--mono);
+  font-size: .82em;
+  color: var(--ember);
+  background: rgba(255,122,69,.08);
+  border: 1px dashed rgba(255,122,69,.45);
+  border-radius: 4px;
+  padding: .05em .4em;
+}
+
+footer {
+  margin-top: clamp(3rem, 8vh, 4.5rem);
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0 2.5rem;
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--dim);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem 1.5rem;
+  flex-wrap: wrap;
+}
+.foot-nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.foot-nav a { color: var(--dim); text-decoration: none; }
+.foot-nav a:hover { color: var(--amber); }
+
+/* ---- page-specific: the escalation ladder ----------------------------- */
+
+.ladder { list-style: none; margin: 1.25rem 0 1.5rem; padding: 0; max-width: 44rem; }
+.ladder li {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: .25rem 1rem;
+  padding: .8rem 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+.ladder li:last-child { border-bottom: 1px solid var(--line); }
+.ladder .step {
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--amber);
+  padding-top: .18em;
+}
+
+@media (max-width: 34rem) {
+  .toc { columns: 1; }
+  .rail { font-size: .68rem; }
+  .ladder li { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="rail">
+    <a class="mark" href="/">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M8 11l5 5-5 5" stroke="#FFB454" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17 21h7" stroke="#FFB454" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span>Devpipe</span>
+    </a>
+    <nav class="rail-nav" aria-label="Documents">
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html" aria-current="page">Acceptable use</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="banner" role="note">
+      <b>Draft — not in force</b>
+      No lawyer has read this. It binds nobody and it will change. It is published
+      now so the rules and the reason for them can be argued with while there is
+      still time. Passages a lawyer has to decide are marked
+      <span class="ph">like this</span>.
+    </div>
+
+    <div class="head">
+      <p class="eyebrow">Draft document</p>
+      <h1>Acceptable use</h1>
+      <p class="meta">
+        Drafted 7 August 2026 · Effective: not yet<br>
+        Part of the <a href="/terms.html">terms of service</a> once both are in force
+      </p>
+      <p class="lede">
+        Every box runs on a machine Devpipe rents from DigitalOcean under one
+        account. An abuse report about your box arrives at that account, not
+        yours. One machine mining coins or scanning ports can get the whole
+        account flagged, and that takes every other customer's box down with it.
+        That is the reason for every rule below — not a moral position, a shared
+        blast radius.
+      </p>
+    </div>
+
+    <ol class="toc">
+      <li><a href="#mining">01 · No mining</a></li>
+      <li><a href="#spam">02 · No spam</a></li>
+      <li><a href="#attacks">03 · Nothing pointed at strangers</a></li>
+      <li><a href="#illegal">04 · Nothing illegal</a></li>
+      <li><a href="#proxies">05 · No anonymising services</a></li>
+      <li><a href="#resale">06 · No resale</a></li>
+      <li><a href="#agents">07 · Respect the agent vendors</a></li>
+      <li><a href="#platform">08 · Leave the platform alone</a></li>
+      <li><a href="#enforcement">09 · What happens on a report</a></li>
+      <li><a href="#reporting">10 · Reporting abuse</a></li>
+    </ol>
+
+    <section id="mining">
+      <h2><span class="n">01</span> No mining, and nothing else that turns compute into money for its own sake</h2>
+      <p>
+        No cryptocurrency mining, no proof-of-work of any kind, no bandwidth
+        resale or "passive income" clients, no ad-viewing or captcha-solving
+        farms.
+      </p>
+      <p>
+        This is the single most common reason a hosting account gets flagged, and
+        the arithmetic never works anyway: on a machine this size the electricity
+        costs more than the coin. If a box is doing it, we will see it in the
+        provider's usage graphs before anyone reports it.
+      </p>
+    </section>
+
+    <section id="spam">
+      <h2><span class="n">02</span> No spam</h2>
+      <p>
+        No bulk unsolicited email, no address harvesting, no open mail relays, no
+        sending on behalf of someone who did not ask you to.
+      </p>
+      <p>
+        Outbound port 25 is blocked at the provider by default and we are not
+        going to ask for it to be opened. Send transactional mail through a
+        provider with an API and a reputation to protect.
+      </p>
+    </section>
+
+    <section id="attacks">
+      <h2><span class="n">03</span> Nothing pointed at somebody else's machine</h2>
+      <ul>
+        <li>No port scanning, vulnerability scanning, brute forcing, or credential stuffing against systems you do not own.</li>
+        <li>No denial of service, traffic floods, or amplification.</li>
+        <li>No command and control, botnet nodes, malware hosting, phishing pages, or fake sign-in pages.</li>
+      </ul>
+      <h3>Security research</h3>
+      <p>
+        Fine against your own systems, or against a target where you hold written
+        authorisation. The authorisation is yours to produce when a report lands,
+        and it needs to exist before the scan does, not after.
+      </p>
+      <p>
+        An agent doing it unprompted is still your box doing it. If you point an
+        autonomous process at the internet, scope it.
+      </p>
+    </section>
+
+    <section id="illegal">
+      <h2><span class="n">04</span> Nothing illegal</h2>
+      <ul>
+        <li>Nothing unlawful where you are or where the box is. You pick the region, so you pick the second one.</li>
+        <li>Child sexual abuse material ends the account immediately, with no warning and no appeal, and is reported to the authorities.</li>
+        <li>No distributing content you do not have the rights to. A box is not a warez host or a torrent seedbox.</li>
+        <li>Nothing that exists to defraud people: fake shops, fake support desks, cloned sign-in pages.</li>
+      </ul>
+    </section>
+
+    <section id="proxies">
+      <h2><span class="n">05</span> No anonymising services for other people</h2>
+      <p>
+        No open proxies, no public VPN endpoints, no Tor exit relays. Use one for
+        your own traffic if you like; running one for the public generates abuse
+        reports in a volume we cannot answer, and every one of them lands on the
+        provider account that all the other boxes depend on.
+      </p>
+    </section>
+
+    <section id="resale">
+      <h2><span class="n">06</span> No resale</h2>
+      <p>
+        A box is for you and the people you work with directly. Do not resell it,
+        sublet it, rent out shells on it, or run other people's CI on it as a
+        service. Do not share an account so that several people can buy access to
+        one box.
+      </p>
+      <p>
+        If you want boxes for a team, that is a thing we want to sell you —
+        <span class="ph">team accounts are not built yet; say what to do in the meantime</span>.
+      </p>
+    </section>
+
+    <section id="agents">
+      <h2><span class="n">07</span> Respect the agent vendors' terms</h2>
+      <p>
+        The agent CLIs are yours, signed in with your own account. Using a box to
+        share one subscription across many people, to evade rate limits, or to
+        automate something the vendor forbids is between you and them until it is
+        not — a vendor that decides Devpipe's address range is the problem takes
+        every user's agent down with it.
+      </p>
+    </section>
+
+    <section id="platform">
+      <h2><span class="n">08</span> Leave the platform alone</h2>
+      <ul>
+        <li>No attempts to escape the virtual machine, reach the hypervisor, or reach our control plane.</li>
+        <li>No probing or attacking other customers' boxes.</li>
+        <li>No tampering with the daemon, its token, or the certificate on your hostname. Breaking them mostly breaks your own box, but the token is what lets your box talk to us.</li>
+      </ul>
+      <p>
+        If you find a way through, report it to
+        <span class="ph">security@devpipe.com — mailbox to be created</span>. We
+        will not pursue anyone who reports in good faith, stops at proof, and does
+        not take data. <span class="ph">Decide whether to publish a formal safe-harbour statement.</span>
+      </p>
+    </section>
+
+    <section id="enforcement">
+      <h2><span class="n">09</span> What happens when we get a report</h2>
+      <p>
+        We read it, and we start with box metadata — size, region, the tools it was
+        built with, when it was created, what the provider's network graphs show.
+        Most reports resolve there without anyone looking at your disk. Where they
+        do not, we may have to look at the box itself; the
+        <a href="/terms.html#access">terms</a> and the
+        <a href="/privacy.html#terminal">privacy policy</a> say plainly what that
+        means.
+      </p>
+      <ul class="ladder">
+        <li>
+          <span class="step">First</span>
+          <span>An email describing what we have been told and what needs to stop, with time to fix it.</span>
+        </li>
+        <li>
+          <span class="step">Then</span>
+          <span>Suspension, if the reply does not come or the behaviour does not stop. Your sessions end, you cannot sign in, and your boxes are marked for destruction. There is no powered-off state we can park a box in, so this is not a pause — it is the step before the disk goes.</span>
+        </li>
+        <li>
+          <span class="step">Straight away</span>
+          <span>The same, without notice, where a third party is being actively harmed or the provider account is at risk. We explain afterwards, and we do explain.</span>
+        </li>
+        <li>
+          <span class="step">Last</span>
+          <span>Destruction of the box and closure of the account for deliberate or repeated abuse. The disk goes with it.</span>
+        </li>
+      </ul>
+      <p>
+        Appeals go to <span class="ph">abuse@devpipe.com — mailbox to be created</span>
+        and a person reads them. Because suspension takes the box down rather
+        than pausing it, an account suspended in error is refunded for the rest
+        of the period it had paid for; a box that is already gone cannot be
+        handed back. <span class="ph">Decide the billing treatment for a suspension that turns out to be justified.</span>
+      </p>
+    </section>
+
+    <section id="reporting">
+      <h2><span class="n">10</span> Reporting abuse to us</h2>
+      <p>
+        If a Devpipe box is bothering you, write to
+        <span class="ph">abuse@devpipe.com — mailbox to be created</span> with the
+        IP address or hostname, timestamps including the timezone, and enough log
+        to show what happened. Reports with those three things get acted on the
+        same day; reports without them mostly cannot be traced to a box at all.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <span>Devpipe · draft documents</span>
+    <nav class="foot-nav" aria-label="Site">
+      <a href="/">Home</a>
+      <a href="/self-host.html">Self-host</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/aup.html">Acceptable use</a>
+    </nav>
+  </footer>
+</div>
+
+</body>
+</html>
