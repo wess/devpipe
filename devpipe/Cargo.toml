@@ -1,0 +1,35 @@
+[package]
+name = "devpipe"
+version.workspace = true
+edition.workspace = true
+description = "Remote agentic development environments: an environment's panes over one socket"
+
+[dependencies]
+anyhow = "1"
+# `dyn Backend` needs dyn-compatible async methods, which native AFIT does
+# not give. One small macro is cheaper than hand-rolling BoxFuture returns.
+async-trait = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Constant-time token comparison. Hand-rolling it is the classic way to leak a
+# secret one byte at a time.
+subtle = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "signal", "time", "process", "fs"] }
+tokio-tungstenite = "0.30"
+# The machine list is meant to be opened in an editor and understood, which
+# rules out the json the daemon uses for its own state.
+toml = "0.9"
+
+# Sinclair's pty and terminal core, pinned to the same released source the
+# browser emulator uses. `vt` is here for the daemon's own mirror of the
+# screen, not to render anything: see replay.rs.
+pty = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
+vt = { git = "https://github.com/wess/sinclair.git", tag = "v1.33.1" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.30"

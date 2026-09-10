@@ -1,1 +1,0 @@
--- The compatibility columns and tables were deliberately retained by `up`.
