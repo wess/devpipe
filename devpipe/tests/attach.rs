@@ -156,3 +156,79 @@ async fn an_unknown_environment_is_named_in_the_refusal() {
         other => panic!("expected an error, got {other:?}"),
     }
 }
+
+/// A command that finishes before anyone can attach to it.
+///
+/// The daemon starts a keeper, the keeper starts the command, and the command
+/// is over before the daemon has connected to read the output — which for `ls`
+/// is the normal case rather than a race worth mentioning. Repeated, because
+/// the version of this bug that shipped passed on a fast machine and failed on
+/// a CI runner.
+#[tokio::test]
+async fn output_survives_a_command_that_finishes_instantly() {
+    let host = local_host().await;
+    for _ in 0..8 {
+        let (mut sink, mut source, _) = greet(host.addr, TOKEN).await;
+        open(
+            &mut sink,
+            &mut source,
+            None,
+            None,
+            &["/bin/sh", "-c", "echo gone-already"],
+        )
+        .await;
+        let seen = painted(&mut source, "gone-already").await;
+        assert!(seen.contains("gone-already"), "{seen:?}");
+    }
+}
+
+/// The other half: a session that has ended is not offered for resuming, even
+/// while its keeper is still around to hand out the last screen.
+#[tokio::test]
+async fn a_session_that_ended_is_not_resumable_during_the_grace() {
+    let host = local_host().await;
+    let (mut sink, mut source, _) = greet(host.addr, TOKEN).await;
+    let session = open(
+        &mut sink,
+        &mut source,
+        None,
+        None,
+        &["/bin/sh", "-c", "echo done"],
+    )
+    .await;
+    // Not when the output appears — the shell has echoed but has not
+    // necessarily exited. The pane closing is the daemon saying the child has.
+    loop {
+        let frame = next(&mut source).await.expect("the pane should close");
+        if frame.channel == PANE && frame.op == Op::Close {
+            break;
+        }
+    }
+
+    let listed = host.host.describe().await;
+    assert!(
+        listed.environments[0].sessions.is_empty(),
+        "a finished session should not be listed: {:?}",
+        listed.environments[0].sessions
+    );
+
+    let (mut sink, mut source, _) = greet(host.addr, TOKEN).await;
+    send(
+        &mut sink,
+        devpipe::proto::Frame::control(&devpipe::proto::FromClient::Open {
+            channel: PANE,
+            pane: devpipe::proto::Pane::Pty {
+                environment: None,
+                session: Some(session),
+                argv: vec![],
+                cols: 80,
+                rows: 24,
+            },
+        }),
+    )
+    .await;
+    match control(&mut source).await {
+        Some(devpipe::proto::FromServer::Error { .. }) => {}
+        other => panic!("resuming a finished session should be refused, got {other:?}"),
+    }
+}

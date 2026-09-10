@@ -19,6 +19,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -83,6 +85,14 @@ enum Saying {
     /// ended and a keeper that was killed.
     Ended,
 }
+
+/// How long a keeper outlives its child.
+///
+/// The window this closes is small and completely ordinary: the daemon starts
+/// a keeper, the keeper starts `ls`, and `ls` is finished before the daemon has
+/// connected to read the output. Without the grace the socket is already gone
+/// and the person gets an error instead of their output.
+const GRACE: Duration = Duration::from_secs(10);
 
 /// Where keepers put their sockets.
 ///
@@ -159,18 +169,43 @@ pub async fn run(dir: PathBuf) -> Result<()> {
     out.flush().await?;
     drop(out);
 
+    let live = Arc::new(AtomicUsize::new(0));
     let mut gone = session.alive_watch();
+    // Already over. A command short enough to finish before its own keeper
+    // finished starting is not exotic — `attach -- ls` is one — and the watch
+    // reports state rather than transitions, so nothing would fire for it.
+    let mut deadline = (!session.is_alive()).then(|| tokio::time::Instant::now() + GRACE);
+
     loop {
+        let expiring = async {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
                 let session = session.clone();
-                tokio::spawn(async move { serve_one(stream, session).await });
+                let live = live.clone();
+                live.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    serve_one(stream, session).await;
+                    live.fetch_sub(1, Ordering::SeqCst);
+                });
             }
-            _ = gone.changed() => {
+            _ = gone.changed(), if deadline.is_none() => {
                 if !*gone.borrow() {
+                    deadline = Some(tokio::time::Instant::now() + GRACE);
+                }
+            }
+            _ = expiring => {
+                // Not while somebody is still reading. They are collecting a
+                // final screen and it takes a round trip, not ten seconds.
+                if live.load(Ordering::SeqCst) == 0 {
                     break;
                 }
+                deadline = Some(tokio::time::Instant::now() + Duration::from_secs(1));
             }
         }
     }
@@ -193,6 +228,12 @@ async fn serve_one(stream: UnixStream, session: Arc<Session>) {
 
     match asking {
         Asking::Describe => {
+            // During the grace period the session is still *readable* but it
+            // is not still running, and a list that says otherwise would offer
+            // people a session to resume that has already ended.
+            if !session.is_alive() {
+                return;
+            }
             let (cols, rows) = session.size();
             let _ = write_frame(
                 &mut writing,
