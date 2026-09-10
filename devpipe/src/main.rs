@@ -17,6 +17,7 @@ use devpipe::backend::{Backend, docker::Docker, local::Local};
 use devpipe::host::{Host, state_dir};
 use devpipe::machines::{DEFAULT_PORT, Machine, Machines, Spot};
 use devpipe::proto::{EnvInfo, FromClient, FromServer, HostInfo};
+use devpipe::tunnel::{self, Asked, Target};
 use devpipe::{attach, secrets, serve, term};
 
 /// How long one machine gets to answer before the tree prints it as
@@ -95,6 +96,14 @@ enum Command {
         /// What to run. Defaults to a shell inside the environment.
         #[arg(last = true)]
         argv: Vec<String>,
+    },
+    /// Reach an environment's ports from this machine, until ctrl-c.
+    Forward {
+        /// `machine/environment`.
+        path: String,
+        /// Which ports, as the environment sees them: `3000`, or `8080:3000`
+        /// to land it somewhere else here. All of them when you name none.
+        ports: Vec<String>,
     },
     /// Wake an environment.
     Start { path: String },
@@ -244,6 +253,7 @@ async fn main() -> Result<()> {
             ask(&spot, FromClient::DestroyEnvironment { id }).await
         }
         Command::Attach { path, argv } => open(path, argv).await,
+        Command::Forward { path, ports } => forward(path, ports).await,
         Command::Secret { command, on } => secret(command, on).await,
         Command::Serve {
             bind,
@@ -607,6 +617,96 @@ async fn open(path: Option<String>, argv: Vec<String>) -> Result<()> {
     .await;
     drop(tunnel);
     ending
+}
+
+/// Bring an environment's ports to this machine.
+///
+/// The environment already publishes what it was created with to a port on its
+/// own machine's loopback, chosen by the kernel so that two environments can
+/// both want 3000. This is the second half of that: one ssh carrying those
+/// host-side ports here, so the number in the browser is the number the dev
+/// server thinks it is listening on.
+async fn forward(path: String, ports: Vec<String>) -> Result<()> {
+    let machines = Machines::open(&state_dir());
+    let spot = Spot::parse(&path, &machines)?;
+    let machine = spot.machine(&machines)?;
+    let wanted = environment_of(&spot)?;
+
+    let reached = machine.reach().await?;
+    let environment = reached
+        .host
+        .environments
+        .iter()
+        .find(|e| e.name == wanted || e.id == wanted)
+        .with_context(|| format!("no environment {wanted} on {}", machine.name))?
+        .clone();
+    drop(reached);
+
+    let asked: Vec<Asked> = if ports.is_empty() {
+        environment
+            .ports
+            .iter()
+            .map(|p| Asked {
+                here: None,
+                inside: p.inside,
+            })
+            .collect()
+    } else {
+        ports
+            .iter()
+            .map(|p| tunnel::parse_port(p))
+            .collect::<Result<_>>()?
+    };
+    let matched = tunnel::resolve(&environment.name, &environment.ports, &asked)?;
+
+    let mut pairs = Vec::new();
+    let mut shown = Vec::new();
+    for (want, outside) in matched {
+        // Their number if they asked for one, the environment's own if it is
+        // free, and something rather than a refusal otherwise — the point is
+        // to see the thing, and being told a port is busy is not that.
+        let local = match want.here {
+            Some(here) if !tunnel::port_is_free(here) => bail!("port {here} is in use here"),
+            Some(here) => here,
+            None if tunnel::port_is_free(want.inside) => want.inside,
+            None => {
+                let spare = tunnel::free_port()?;
+                eprintln!("devpipe: {} is busy here, using {spare}", want.inside);
+                spare
+            }
+        };
+        pairs.push((local, outside));
+        shown.push((local, want.inside));
+    }
+
+    let target = machine
+        .ssh
+        .as_deref()
+        .map(Target::parse)
+        .with_context(|| format!("{} is not reached over ssh", machine.name))?;
+    let mut tunnel = target.forward_all(&pairs).await?;
+
+    for (local, inside) in &shown {
+        println!("http://localhost:{local}  →  {}:{inside}", environment.name);
+    }
+    println!("ctrl-c to stop");
+
+    // Held until then: dropping it takes the forwards down. Watching ssh as
+    // well, because a carrier that died looks exactly like an idle one and
+    // sitting here looking busy would be a lie.
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("devpipe: forwarding stopped");
+                return Ok(());
+            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                if tunnel.has_gone() {
+                    bail!("ssh to {} went away", machine.name);
+                }
+            }
+        }
+    }
 }
 
 async fn secret(command: SecretCommand, on: Option<String>) -> Result<()> {

@@ -72,6 +72,18 @@ victim, and on a machine where the daemon *is* the product, the victim is
 often the daemon. Every environment also gets a 4096-process limit whether you
 ask or not.
 
+A dev server inside an environment reaches your browser with `dp forward`:
+
+```sh
+dp forward box-a/api            # every port it publishes
+dp forward box-a/api 3000       # just this one
+dp forward box-a/api 8080:3000  # 3000 in there, 8080 here
+```
+
+The number you type is the one the server inside thinks it is listening on;
+what the kernel picked on the machine is nobody's business. Runs until ctrl-c,
+and says so if ssh goes away underneath it.
+
 `dp tree --watch` is live rather than polled: the daemon announces every
 change to whoever asked to watch, including sessions that end while nothing is
 attached to them. A machine that goes down becomes a line in the tree and comes
@@ -174,8 +186,8 @@ Devpipe is 0.1. The daemon, the CLI and the tree are real and tested; the
 things below are known gaps rather than surprises.
 
 - **Files move by git.** There is no `dp cp`, and no file pane.
-- **Ports stay on the machine's loopback.** Reaching an environment's dev server
-  from your laptop means an `ssh -L` you set up yourself.
+- **A port has to be declared when the environment is made.** `--port 3000` at
+  `dp new` time; a container's published ports cannot change afterwards.
 - **A workspace is the only copy of itself.** If the machine dies, so does
   anything not pushed.
 - **One client at a time, really.** A second attach to the same session works
