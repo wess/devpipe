@@ -58,6 +58,13 @@ tar -xzf "$tmp/devpipe.tar.gz" -C "$tmp"
 [ -f "$tmp/devpipe" ] || die "the tarball has no devpipe in it"
 chmod +x "$tmp/devpipe"
 
+# A prefix that does not exist yet is the normal state of ~/.local/bin, not a
+# reason to ask for root. Make it when the parent allows, and only escalate for
+# somewhere that is genuinely not yours.
+if [ ! -d "$PREFIX" ] && mkdir -p "$PREFIX" 2>/dev/null; then
+  say "created $PREFIX"
+fi
+
 # `dp` is the same binary under a shorter name — a symlink rather than a second
 # copy, so an upgrade cannot leave the two disagreeing about the protocol.
 if [ -w "$PREFIX" ]; then
@@ -70,5 +77,12 @@ elif command -v sudo >/dev/null 2>&1; then
 else
   die "cannot write $PREFIX and there is no sudo; set DEVPIPE_PREFIX"
 fi
+
+# On the person's own PATH or not — worth knowing before they retype the
+# command and wonder why the shell disagrees.
+case ":$PATH:" in
+  *":$PREFIX:"*) ;;
+  *) say "note: $PREFIX is not on your PATH" ;;
+esac
 
 say "installed $("$PREFIX/devpipe" --version), as devpipe and dp"
