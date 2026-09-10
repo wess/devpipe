@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the binaries can be proven to build before a tag exists to name them.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners rather than cross-compilation: the pty crate builds
+          # C, and a cross linker is one more thing to be wrong about.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          set -eu
+          tar -czf "devpipe-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" devpipe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devpipe-${{ matrix.target }}
+          path: devpipe-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Sums
+        # install.sh refuses to install a tarball this file does not name, so
+        # it is not an extra — it is the only thing standing between a host and
+        # whatever the network handed it.
+        run: sha256sum devpipe-*.tar.gz > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            devpipe-*.tar.gz
+            SHA256SUMS
+          fail_on_unmatched_files: true

@@ -1,60 +1,54 @@
-#!/usr/bin/env bash
-# Create a droplet and install the daemon on it.
+#!/bin/sh
+# Turn a fresh Linux box into a Devpipe host.
 #
-# Needs DIGITAL_OCEAN_API in the environment. Locally that comes from Synapse:
-#   synapse run -- deploy/provision.sh
+#   ssh box 'curl -fsSL https://raw.githubusercontent.com/wess/devpipe/main/deploy/provision.sh | sh'
 #
-# Usage: provision.sh [name]
-set -euo pipefail
+# Installs a container runtime if there is none, installs devpipe, and starts
+# it as a user service bound to loopback. Reaching it from your laptop is
+# `devpipe --ssh box`, which is why nothing here opens a port.
+set -eu
 
-NAME="${1:-devpipe-$(date +%s)}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO=${DEVPIPE_REPO:-wess/devpipe}
+BRANCH=${DEVPIPE_BRANCH:-main}
+RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
-# Smallest first, always. A Devpipe box runs one agent CLI and a shell, not a
-# fleet, and the size is the only thing on the bill that scales per customer.
-#
-# 512MB ($4) is the floor DigitalOcean offers. It has not been proven to hold
-# an agent CLI under load, and the failure mode is the OOM killer taking the
-# session mid-task, which reads as a random disconnect rather than as running
-# out of memory. Measure before trusting it: `deploy/measure.sh`.
-SIZE="${DEVPIPE_SIZE:-s-1vcpu-512mb-10gb}"
-REGION="${DEVPIPE_REGION:-nyc3}"
-IMAGE="${DEVPIPE_IMAGE:-debian-13-x64}"
-SSH_KEY_ID="${DEVPIPE_SSH_KEY_ID:?set DEVPIPE_SSH_KEY_ID to a key id from /v2/account/keys}"
+say() { printf 'devpipe: %s\n' "$*" >&2; }
+die() { say "$*"; exit 1; }
 
-API="https://api.digitalocean.com/v2"
-AUTH="Authorization: Bearer ${DIGITAL_OCEAN_API:?not in environment}"
+[ "$(uname -s)" = Linux ] || die "provision.sh is for a Linux host; on a Mac just run devpipe serve"
+[ "$(id -u)" != 0 ] || die "run this as the user who will own the environments, not as root"
+command -v systemctl >/dev/null 2>&1 || die "this expects systemd"
 
-echo "==> creating $NAME ($SIZE, $IMAGE, $REGION)"
-ID=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" "$API/droplets" -d "{
-  \"name\": \"$NAME\",
-  \"region\": \"$REGION\",
-  \"size\": \"$SIZE\",
-  \"image\": \"$IMAGE\",
-  \"ssh_keys\": [$SSH_KEY_ID],
-  \"tags\": [\"devpipe\"]
-}" | grep -oE '"id":[0-9]+' | head -1 | cut -d: -f2)
-test -n "$ID" || { echo "no droplet id returned"; exit 1; }
-echo "    id $ID"
+if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+  say "installing docker"
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo usermod -aG docker "$USER"
+  # The group is granted to new logins, not to this shell, and the daemon that
+  # starts below would otherwise fail on a permission error that reads like a
+  # missing docker.
+  say "you have been added to the docker group; log out and back in before starting a session"
+fi
 
-echo "==> waiting for an address"
-for _ in $(seq 1 30); do
-  J=$(curl -s -H "$AUTH" "$API/droplets/$ID")
-  IP=$(echo "$J" | grep -o '"ip_address":"[0-9.]*"' | head -1 | cut -d'"' -f4)
-  ST=$(echo "$J" | grep -o '"status":"[a-z]*"' | head -1 | cut -d'"' -f4)
-  [ "$ST" = "active" ] && [ -n "$IP" ] && break
-  sleep 6
-done
-test -n "${IP:-}" || { echo "droplet never came up"; exit 1; }
-echo "    $IP"
+curl -fsSL "$RAW/deploy/install.sh" | sh
 
-echo "==> waiting for ssh"
-for _ in $(seq 1 30); do
-  ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$IP" true 2>/dev/null && break
-  sleep 6
+mkdir -p "$HOME/.config/systemd/user"
+curl -fsSL "$RAW/deploy/devpipe.service" -o "$HOME/.config/systemd/user/devpipe.service"
+
+# Without lingering, a user service stops at logout — which is every time you
+# close the ssh session you started it from.
+sudo loginctl enable-linger "$USER"
+systemctl --user daemon-reload
+systemctl --user enable --now devpipe
+
+say "waiting for the host to write its token"
+i=0
+while [ ! -s "$HOME/.devpipe/token" ]; do
+  i=$((i + 1))
+  [ "$i" -lt 50 ] || die "it never came up; systemctl --user status devpipe"
+  sleep 0.2
 done
 
-"$ROOT/deploy/deploy.sh" "$IP"
-echo
-echo "destroy it with:"
-echo "  curl -X DELETE -H \"\$AUTH\" $API/droplets/$ID"
+say "up. from your laptop:"
+say "  export DEVPIPE_SSH=$(id -un)@$(hostname)"
+say "  devpipe env new myproject --repo git@github.com:you/myproject.git"
+say "  devpipe attach --env myproject"

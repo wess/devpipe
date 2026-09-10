@@ -1,0 +1,18 @@
+#!/bin/sh
+# Ask whoever is attached to open a URL.
+#
+# Installed as xdg-open, open, $BROWSER and friends, because nothing in a
+# container can open a browser: there is no display, and the person who would
+# look at one is on a laptop this container cannot name. Every tool that tries
+# — `claude /login`, `codex`, `gh auth login`, half of npm — goes through one
+# of these names, so all of them become a request that travels out on the pty.
+#
+# See devpipe/src/marker.rs for the other end.
+[ -n "${1:-}" ] || { echo "usage: $(basename "$0") <url>" >&2; exit 1; }
+
+# ESC ] 9998 ; devpipe ; open ; <url> ST
+printf '\033]9998;devpipe;open;%s\033\\' "$1"
+
+# And to stderr as well, so a session nobody is watching through devpipe — a
+# plain ssh, a CI log — still tells the person what to go and look at.
+printf '\n%s\n' "$1" >&2

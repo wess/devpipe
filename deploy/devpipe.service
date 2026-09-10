@@ -1,0 +1,27 @@
+# A user unit, not a system one.
+#
+# The tenancy Devpipe assumes is one person per host, and that person's
+# environments should be owned by them: their ~/.devpipe, their workspaces,
+# their ssh login, their docker group membership. A system unit would have to
+# choose a user anyway, and would put the state somewhere that answering
+# `ssh box cat ~/.devpipe/token` no longer works.
+#
+#   install -Dm644 deploy/devpipe.service ~/.config/systemd/user/devpipe.service
+#   loginctl enable-linger "$USER"        # or it stops when you log out
+#   systemctl --user enable --now devpipe
+[Unit]
+Description=Devpipe host
+
+[Service]
+# Loopback on purpose. Reaching this from anywhere else is `devpipe --ssh`,
+# which means the only thing listening on a public interface is sshd — already
+# hardened, already audited, already trusted with more than this.
+ExecStart=/usr/local/bin/devpipe serve --bind 127.0.0.1:7455
+Restart=always
+RestartSec=2
+# Sessions are children of this process, so a restart takes them with it.
+# Long enough for the pty threads to flush what they were painting.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

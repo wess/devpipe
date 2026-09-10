@@ -1,195 +1,154 @@
 # Devpipe
 
-Agents that keep working when you close the laptop.
-
-A box is a durable remote workspace for coding agents. Start an agent in a
-persistent terminal, close the browser or laptop, and attach to the same session
-later from the web app or the `devpipe` CLI. The machine is rented by the hour
-and can sleep when nobody is using it; its files live on a workspace that
-outlives the compute.
+Remote agentic development environments, arranged as a tree:
 
 ```
-src/            the Atlas app — API and web client (Bun + TypeScript)
-  auth/         sessions, the cookie, and what a session is bound to
-  boxes/        box routes, bootstrap, reclaim, and reconciliation
-  machine/      durable provider-operation journal and recovery
-  providers/    compute, workspace, network, and usage adapters
-  previews/ shares/   showing a port or a terminal to somebody who is not you
-  vault/ workspaces/ settings/ users/ admin/ terminals/
-  web/          the React client, including the terminal
-migrations/     schema, one directory per change, up and down
-core/           Rust: sinclair's VT compiled to WebAssembly for the browser
-daemon/         Rust: the per-box daemon — ptys, files, and a port proxy
-                plus the cross-platform `devpipe` CLI
-site/           the lander, Caddyfile, and deploy
-deploy/         box provisioning and the daemon's systemd unit
-scripts/        sweep — what the provider is billing for that nothing claims
+machine            a box you can ssh into, running one daemon
+  environment      a workspace, its own ports, its own processes
+    session        a harness, a dev server, a shell
 ```
 
-## One persistent session, two ways in
+Everything is addressed by path — `box-a/api`, `box-a/api/3f2a1b` — so what you
+read off the tree is what you type back. There is no id to remember.
 
-`devpiped` owns each PTY on the box. A browser or CLI attachment is only a
-subscription: disconnecting drops the transport, not the shell or the agent.
-Reattaching replays the current terminal screen. The browser renders that byte
-stream with the Rust emulator in `core/`; the CLI uses the local terminal.
+Sessions belong to their environment, not to the connection and not to the
+daemon. Closing a laptop costs nothing, and so does upgrading Devpipe
+underneath a running session.
 
-## Running one of your own
+## Put it on a box
 
-Apache-2.0, and the repository is the whole product — there is no crippled
-edition. DigitalOcean is the production backend used by devpipe.com. Local
-Docker is a development backend built against the same lifecycle contract;
-Runpod uses that OCI image with Pods, HTTPS proxy endpoints, and network-volume
-workspaces.
-
-Provider calls do not live in routes. The machine layer journals an operation
-before creating, releasing, or deleting a resource, tags the provider resource
-with that operation id, and resumes unfinished provisioning after an API
-restart. Compute, workspaces, network policy, DNS, and usage are explicit
-capabilities because no honest adapter can assume every provider has all five.
-See [docs/providers.md](docs/providers.md).
-
-The first-run requirements depend on the backing provider:
-
-| | |
-|---|---|
-| **A provider** | DigitalOcean needs a write-enabled API token, its DNS zone, and ideally an SSH key. Runpod needs an API key and `DEVPIPE_RUNPOD_IMAGE` pointing to a published box image. Local Docker needs that image built on the API host. |
-| **A box address** | DigitalOcean writes each box beneath a domain hosted on that account. Runpod uses its trusted HTTPS proxy. Docker publishes a random loopback port and the API relays it. |
-| **Postgres** | Sessions, boxes, the audit trail, the sealed credentials. It wants a backup, somewhere the database host is not. |
-| **A host** | A small droplet. It provisions and proxies; it compiles nothing. |
-| **An SSH key on DigitalOcean** | Optional, and the only way onto a VM that wedges partway through setup — which is exactly when nothing else works. |
-
-`DEVPIPE_SECRET_KEY` is the one secret that cannot live in the database, because
-it is what encrypts the database's secrets:
+Any Linux machine you can ssh into. It does not need a public port.
 
 ```sh
-openssl rand -base64 32   # → DEVPIPE_SECRET_KEY in /etc/devpipe.env
+ssh box 'curl -fsSL https://raw.githubusercontent.com/wess/devpipe/main/deploy/provision.sh | sh'
 ```
 
-Without it the provider token is stored as readable text and a copy of a backup
-is a copy of it. The setup wizard generates one and says so plainly rather than
-letting that pass quietly.
+That installs a container runtime if there is none, installs `devpipe`, and
+starts it as a user service bound to `127.0.0.1:7455`. Nothing listens on a
+public interface: the daemon speaks plaintext websocket on loopback, and the
+only thing reaching it from outside is ssh.
 
-The first account registered becomes the owner — exactly one, enforced by a
-unique index rather than by agreement. Set `DEVPIPE_SETUP_TOKEN` before exposing
-a fresh instance and the claim form requires it. The wizard then opens by itself
-and shows only the requirements for the selected provider. Credentials are
-checked before they are stored; DigitalOcean also checks its DNS zone and SSH
-keys.
-
-### One owner, and a team under them
-
-The line is money and irreversibility.
-
-- **owner** — one per instance. The provider token, the spending cap, and who
-  else administers it. Promoting somebody is a *transfer*: you become an admin
-  in the same breath.
-- **admin** — invites, suspensions, the audit log, every box and what the
-  instance is spending, and GPU machines. Never the provider token. That is the
-  whole reason the middle role exists: helping run the instance used to mean
-  holding the credential that can destroy every box on the account.
-- **user** — their own boxes, and what they have cost.
-
-### The spending cap
-
-**Nothing is sold here and nothing is charged.** There is no payment processor
-in this and no billing code — Devpipe creates machines on your DigitalOcean
-account and DigitalOcean invoices you for them, the same as if you had clicked
-Create in their console. What the software adds is that it knows what those
-machines cost, tells you, and stops when you say stop.
-
-The meter counts every box and every volume at the provider's own prices, and
-accumulates over the provider's own calendar month — so destroying a box does
-not undo what it already cost. You get a warning at a threshold you set, a
-refusal for a box whose first hour would cross the line, and past the cap the
-running machines are put to sleep onto their workspaces. A box carrying no
-workspace is never touched by any sweep here, which is the difference between
-reclaiming a machine and destroying somebody's afternoon.
-
-GPU boxes are an admin's to create. The cheapest card is a hundred times the
-hourly cost of the cheapest ordinary box, and the bill lands on whoever
-installed the instance.
-
-## Running it locally
-
-The schema is Postgres — `SERIAL`, `TIMESTAMPTZ`, `NOW()` — so there has to be
-one. `DATABASE_URL` points at it; with nothing set, the API falls back to the
-same local instance the tests use and creates the database on first run.
+On your laptop, the same installer without the service:
 
 ```sh
-docker run -d --name devpipe-postgres -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_USER=postgres -p 55434:5432 postgres:17-alpine
-
-bun install
-bun run dev            # api on :3000, web on :3001
+curl -fsSL https://raw.githubusercontent.com/wess/devpipe/main/deploy/install.sh | sh
 ```
 
-The app is at `/terminals`; `/` is the lander.
+## Use it
 
-### CLI
-
-Install the CLI, sign in once, and attach by box name:
+Installed as both `devpipe` and `dp` — the same binary, `dp` a symlink to it.
 
 ```sh
-curl -fsSL https://devpipe.com/install.sh | sh
-devpipe login
-devpipe boxes
-devpipe attach mybox
+dp add box-a                   # the name is its ssh alias
+dp add box-b
+dp                             # the tree: every machine, everything on it
+
+dp new box-a/api --repo git@github.com:you/api.git --port 3000
+dp attach box-a/api            # ctrl-] to detach; the session stays
+dp tree --watch                # stays open, redraws when anything changes
 ```
 
-`attach` wakes a sleeping box, reuses its newest live shell, and leaves it
-running when you detach with `Ctrl-]`. Use `--new` for a fresh shell or
-`devpipe run mybox -- <command>` for a one-off command. Port forwarding and file
-transfer use the same authenticated daemon connection; run `devpipe --help` for
-the complete command list.
+`dp add` opens the ssh forward, reads the machine's token off the far
+side, checks it answers, and only then writes it down. There is no certificate
+to arrange and no token to paste around. With one machine registered you can
+drop the prefix: `dp attach api`.
 
-### Using local Docker for boxes
+Two environments can both want port 3000 — each gets a private network
+namespace and a host port of the kernel's choosing, which the tree prints.
 
-Build the box image and select the Docker adapter before starting the API:
+`dp tree --watch` is live rather than polled: the daemon announces every
+change to whoever asked to watch, including sessions that end while nothing is
+attached to them. A machine that goes down becomes a line in the tree and comes
+back on its own.
+
+The machine list is `~/.devpipe/machines.toml`, short enough to edit by hand:
+
+```toml
+[[machine]]
+name = "box-a"
+ssh = "wess@box-a"
+```
+
+## Secrets
+
+Set once on the host, lent to every environment at the moment a session starts.
+A key rotated this morning reaches a container created last week; nothing is
+rebuilt and nothing is typed into a shell.
 
 ```sh
-docker build -f deploy/docker/box.Dockerfile -t devpipe-box:local .
-export DEVPIPE_MACHINE_PROVIDER=docker
-export DEVPIPE_SECRET_KEY="$(openssl rand -base64 32)"
-bun run dev
+dp secret set ANTHROPIC_API_KEY --on box-a   # prompts, without echo
+dp secret ls --on box-a                      # names, never values
 ```
 
-Docker publishes each daemon on a random loopback port and the control plane
-relays its terminal websocket. Named Docker volumes are workspaces. This backend
-is for development and provider-contract testing: it does not currently install
-the selectable cloud tool catalogue and it is not a multi-tenant isolation
-boundary.
+`--on` is optional when you have one machine.
 
-For the browser terminal, build the emulator first:
+They live in `~/.devpipe/env` on the host, mode 0600, and are never read back
+out over the socket.
+
+## Signing an agent in
+
+An environment has no browser and no display, and the person who would look at
+one is on a laptop the container cannot name. Measured against Claude Code
+2.1.267 and Codex, on 2026-09-10:
+
+| | What it does | What to do |
+|---|---|---|
+| **Claude Code** | Prints the URL, then waits at `Paste code here if prompted >`. Its callback is hosted at `platform.claude.com`, not localhost. | Open the URL, approve, paste the code back into the pane. Nothing else needed. |
+| **Codex** | Prints the URL, but its callback is `http://localhost:1455` — a localhost on your laptop, where nothing is listening. | `codex login --device-auth`. Codex says so itself when the flow starts. |
+| **Anything else** | Usually shells out to `xdg-open` / `$BROWSER`. | Handled: see below. |
+
+Neither of the first two shells out to a browser at all, so the shim below is
+not what makes them work — a printed URL and a paste is. What makes *that* work
+is that every session is a real pty, so the URL is selectable text.
+
+For everything that does try to open a browser, `xdg-open`, `open`, `$BROWSER`
+and friends in the base image are `deploy/docker/devpipe-open`, which emits an
+OSC that reaches the attached client as a typed `Open` event rather than
+failing silently. `dp attach` prints it; a graphical client should draw a
+button — and should never follow it on its own, because anything in the
+environment can emit that sequence. Only `http` and `https` survive the daemon.
+
+Every session also gets `DEVPIPE=1`, `DEVPIPE_ENVIRONMENT` and
+`DEVPIPE_SESSION`, so a tool or a shell rc can tell it is on a remote machine
+and pick the flow that works there.
+
+The blunt alternative, and often the right one: `dp secret set ANTHROPIC_API_KEY`,
+or `claude setup-token` once and set the result as a secret. Then no agent ever
+has to log in again.
+
+## What an environment is made of
+
+`ghcr.io/wess/devpipe-base:trixie` — Debian with Rust, Node, Bun, Python, git,
+the usual build tooling, and Claude Code already on it. About 2.5GB, pulled
+once per host. `deploy/docker/base.Dockerfile` builds it; `devpipe serve
+--image` points a machine at something else, and `devpipe new --image` at
+something else for one environment.
+
+## Sessions
+
+Each session is a *keeper*: a detached process holding the pty behind a unix
+socket in the runtime directory. `devpipe serve` relays between the websocket
+and that socket and holds nothing a restart can lose, so an upgrade, a crash,
+or `Restart=always` doing its job leaves the work running. A reattaching client
+gets the current screen replayed from a mirror the keeper maintains, not a ring
+of raw bytes — a byte ring starts mid-escape and the client's parser eats the
+text after it as parameters.
+
+What does not survive: a reboot, and stopping the environment. A pty into a
+container that is not running is a pty into nothing, whoever is holding it.
+
+## Bridge mode
+
+`devpipe serve --backend local` makes one environment that *is* the machine —
+no container, no isolation, the user's own files and shell. It is for a box
+somebody already owns and works on. It holds exactly one environment, because
+nothing would separate a second one from the first.
+
+## Building it
 
 ```sh
-cd core && cargo build --release --target wasm32-unknown-unknown
+cargo test          # container tests skip when no runtime answers
+cargo run -- serve --backend local
 ```
 
-## Tests
-
-```sh
-bun test               # api, wizard catalog, and the wasm emulator from JS
-cd core   && cargo test
-cd daemon && cargo test
-```
-
-## Deploying
-
-```sh
-site/deploy.sh <host>          # lander, API, web, and the daemon boxes download
-synapse run -- deploy/provision.sh   # create a box and install onto it
-```
-
-The site deploy refuses a host without `DATABASE_URL` and
-`DEVPIPE_SECRET_KEY`, takes a timestamped `pg_dump` under
-`/var/backups/devpipe`, retains the previous binaries, and requires `/ready`
-before it declares success. Detailed backend and production notes live in
-[docs/providers.md](docs/providers.md) and [docs/production.md](docs/production.md).
-
-Boxes are provisioned with cloud-init and get a real Let's Encrypt certificate
-for their own subdomain, so browser and CLI connections use ordinary system
-trust without certificate exceptions.
-
-## Licence
-
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+`DEVPIPE_TEST_IMAGE` picks the image the container tests run against.

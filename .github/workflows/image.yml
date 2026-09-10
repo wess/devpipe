@@ -1,0 +1,36 @@
+name: Base image
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/docker/base.Dockerfile", ".github/workflows/image.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/base.Dockerfile
+          # A host is as likely to be an arm box as an x86 one, and an image
+          # that only exists for one of them fails at `env new` rather than
+          # here.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/wess/devpipe-base:trixie
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
