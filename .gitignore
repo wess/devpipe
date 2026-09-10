@@ -8,3 +8,23 @@ src/web/dist/
 node_modules/
 .build/
 .impeccable/hook.cache.json
+
+# Nothing here has ever held a secret, and this is what keeps it that way.
+# `git add -A` is one keystroke and this repository is public, so the things
+# that would be worst to commit are named before they exist rather than after.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+*.keystore
+
+# Devpipe's own state: a host's token, its secrets file, the relay's keys, and
+# the machine list a client keeps. None of it belongs to the source.
+token
+relay.json
+machines.toml
