@@ -40,6 +40,12 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::host::random_id;
 use crate::keys::{Can, Keys};
 use crate::proto::Frame;
+use crate::session_check::{Asking, cookie_named};
+
+/// The app's session cookie, which the browser sends on a websocket handshake
+/// the same way it sends it on a fetch. Named here because the relay reads it
+/// and the app sets it, and those are two repositories apart.
+const SESSION_COOKIE: &str = "dp_session";
 
 /// How long a machine has to bring up a data connection after being asked.
 /// Long enough for a slow link, short enough that a client is not left holding
@@ -64,6 +70,11 @@ pub enum ToRelay {
     Reach { token: String, machine: String },
     /// A client, asking who is here.
     Online { token: String },
+    /// A browser, asking for a key of its own.
+    ///
+    /// No token: whoever is asking proved who they are by having a session
+    /// with the app, and the cookie carrying it arrived with the handshake.
+    Mint { can: Can },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +94,12 @@ pub enum FromRelay {
     Online {
         machines: Vec<String>,
     },
+    /// Said once. The relay keeps what it hashes to and cannot say it again.
+    Minted {
+        account: String,
+        can: Can,
+        token: String,
+    },
     Error {
         message: String,
     },
@@ -94,6 +111,10 @@ struct Enrolled {
 
 pub struct Relay {
     keys: Mutex<Keys>,
+    /// Where to check a browser's session, when the relay is placed behind the
+    /// app. `None` means keys are minted by hand and nothing here trusts a
+    /// cookie — which is the right posture for a relay standing on its own.
+    verify: Option<Asking>,
     /// Keyed by account *and* name, so two people can both have a `box-a` and
     /// neither can reach the other's by knowing what it is called.
     machines: Mutex<HashMap<(String, String), Enrolled>>,
@@ -104,8 +125,13 @@ pub struct Relay {
 
 impl Relay {
     pub fn new(keys: Keys) -> Arc<Relay> {
+        Relay::with_sessions(keys, None)
+    }
+
+    pub fn with_sessions(keys: Keys, verify: Option<Asking>) -> Arc<Relay> {
         Arc::new(Relay {
             keys: Mutex::new(keys),
+            verify,
             machines: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
         })
@@ -150,13 +176,40 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>) -> Result<()> {
     }
 }
 
+/// Accept the upgrade, keeping the one header that matters.
+///
+/// The cookie is read here and nowhere else: it exists for the length of one
+/// `Mint`, is never stored, and is never sent anywhere but the loopback address
+/// the operator named.
+// The large `Err` is tungstenite's `ErrorResponse`, and the callback's shape is
+// theirs rather than ours.
+#[allow(clippy::result_large_err)]
+async fn accept_keeping_cookie(stream: TcpStream) -> Result<(Socket, String)> {
+    let mut cookie = String::new();
+    let taken = &mut cookie;
+    let socket = tokio_tungstenite::accept_hdr_async(
+        stream,
+        |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+            if let Some(value) = request.headers().get("cookie")
+                && let Ok(value) = value.to_str()
+                && let Some(session) = cookie_named(value, SESSION_COOKIE)
+            {
+                *taken = format!("{SESSION_COOKIE}={session}");
+            }
+            Ok(response)
+        },
+    )
+    .await?;
+    Ok((socket, cookie))
+}
+
 /// Who is this, and what do they want.
 ///
 /// Decided by the first message, so there is one endpoint and no paths to keep
 /// in step with whatever proxy is in front.
 async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
     stream.set_nodelay(true).ok();
-    let mut socket = tokio_tungstenite::accept_async(stream).await?;
+    let (mut socket, cookie) = accept_keeping_cookie(stream).await?;
 
     let opening = next_frame(&mut socket)
         .await?
@@ -196,6 +249,48 @@ async fn greet(stream: TcpStream, relay: Arc<Relay>) -> Result<()> {
                 &mut socket,
                 &FromRelay::Online {
                     machines: relay.online(&account),
+                },
+            )
+            .await?;
+            let _ = socket.close(None).await;
+            Ok(())
+        }
+        ToRelay::Mint { can } => {
+            let Some(verify) = &relay.verify else {
+                refuse(&mut socket, "this relay does not mint keys from sessions").await;
+                bail!("minting is not configured");
+            };
+            let account = match verify.who(&cookie).await {
+                Ok(account) => account,
+                Err(e) => {
+                    refuse(&mut socket, "sign in first").await;
+                    bail!("session check: {e}");
+                }
+            };
+            // Rotation, not accumulation. The relay stores hashes, so a key it
+            // already granted can never be shown again — which means "show me
+            // my key" has to mean "give me a new one", and the old one has to
+            // stop working or they would pile up forever.
+            let token = {
+                let mut keys = relay.keys.lock().unwrap();
+                let stale: Vec<String> = keys
+                    .all()
+                    .iter()
+                    .filter(|k| k.account == account && k.can == can)
+                    .map(|k| k.hash.clone())
+                    .collect();
+                for hash in stale {
+                    let _ = keys.revoke(&hash);
+                }
+                keys.grant(&account, can, "minted from a session")?
+            };
+            eprintln!("relay: minted a {} key for {account}", can.as_str());
+            say(
+                &mut socket,
+                &FromRelay::Minted {
+                    account,
+                    can,
+                    token,
                 },
             )
             .await?;

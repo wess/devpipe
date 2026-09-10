@@ -118,6 +118,23 @@ app.devpipe.com {
 		reverse_proxy 127.0.0.1:3000
 	}
 
+	# The relay, on the app's own origin so that a browser attaches its session
+	# cookie to the websocket upgrade. That is the whole mechanism behind
+	# minting a key from a sign-in: the cookie is HttpOnly, so the page cannot
+	# read it or forward it, but the browser sends it here regardless and the
+	# relay asks the API on :3000 whose it is.
+	#
+	# Long timeouts because these carry terminal sessions, which are idle for
+	# minutes at a time and must not be cut for it.
+	handle /relay {
+		reverse_proxy 127.0.0.1:7456 {
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
+
 	# One page that decides what to show from /api/auth/me, so a deep link and
 	# a refresh both land somewhere sensible rather than on a 404.
 	handle {
@@ -130,9 +147,11 @@ app.devpipe.com {
 		# an injected script cannot read it, but it could still act as the user
 		# for as long as the page is open. This is what stands in the way.
 		#
-		# No wasm-unsafe-eval and no wss:* yet — this page has no terminal in
-		# it. They go back the day it does, and not before.
-		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src 'none'"
+		# wss to this origin and no further: the page talks to the relay at
+		# /relay and to the API at /api, and has no business anywhere else.
+		# Still no wasm-unsafe-eval — this page has no terminal in it, and that
+		# goes back the day it does rather than in advance.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self' wss://app.devpipe.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src 'none'"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"

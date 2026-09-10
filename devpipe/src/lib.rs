@@ -32,5 +32,6 @@ pub mod replay;
 pub mod secrets;
 pub mod serve;
 pub mod session;
+pub mod session_check;
 pub mod term;
 pub mod tunnel;

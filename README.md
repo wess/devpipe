@@ -174,6 +174,16 @@ devpipe serve --relay wss://relay.example.com --relay-token <enrol key> --relay-
 dp add box-a --relay wss://relay.example.com --relay-token <reach key> --token <the host's>
 ```
 
+Behind the app, the relay mints those keys from a sign-in instead
+(`devpipe relay serve --sessions http://127.0.0.1:3000/api/auth/me`). The
+browser's session cookie is `HttpOnly` — the page cannot read it or forward it
+— but it rides the websocket upgrade, so the relay reads it there and asks the
+app whose it is. Nothing sensitive passes through JavaScript, and the relay
+never sees a password.
+
+A key is shown once, because the relay keeps only what it hashes to. Asking
+again replaces it, and the one it replaces stops working.
+
 Keys belong to an account, and machines are scoped to it — two people can both
 have a `box-a` and neither can reach the other's by knowing what it is called.
 Asking for somebody else's gets the same sentence as asking for one that does
@@ -241,8 +251,8 @@ things below are known gaps rather than surprises.
 - **No web or desktop client.** The pane protocol was built for them, the relay
   gives them a way in, and `dp` is the reference implementation — but neither
   client exists yet.
-- **The relay's accounts are local to it.** `devpipe relay grant` mints keys;
-  nothing ties them to a sign-in on a website yet.
+- **Account names come from whatever the app calls people.** The relay asks
+  `/auth/me` and uses the username it gets back; there is no user table here.
 
 ## Building it
 

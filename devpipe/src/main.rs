@@ -191,6 +191,12 @@ enum RelayCommand {
         /// and accept that machines dial it in the clear.
         #[arg(long, default_value = "127.0.0.1:7456")]
         bind: String,
+        /// Where to check a browser's session, when this relay sits behind the
+        /// app: `http://127.0.0.1:3000/api/auth/me`. Loopback only — the check
+        /// carries somebody's cookie. Without it the relay trusts no cookie and
+        /// keys are minted by hand, which is right for one standing alone.
+        #[arg(long)]
+        sessions: Option<String>,
     },
     /// Mint a key for an account. Shown once, and never again by anything —
     /// what is kept is what it hashes to.
@@ -922,8 +928,12 @@ async fn relaying(command: RelayCommand, dir: Option<PathBuf>) -> Result<()> {
             }
             Ok(())
         }
-        RelayCommand::Serve { bind } => {
-            if keys.is_empty() {
+        RelayCommand::Serve { bind, sessions } => {
+            let verify = sessions
+                .as_deref()
+                .map(devpipe::session_check::Asking::parse)
+                .transpose()?;
+            if verify.is_none() && keys.is_empty() {
                 // Rather than starting something nothing can talk to and
                 // leaving the reason to be discovered from a refused socket.
                 bail!(
@@ -934,7 +944,10 @@ async fn relaying(command: RelayCommand, dir: Option<PathBuf>) -> Result<()> {
             let listener = TcpListener::bind(&bind).await?;
             eprintln!("devpipe: relay on ws://{}", listener.local_addr()?);
             eprintln!("devpipe: {} key(s) · {}", keys.all().len(), dir.display());
-            devpipe::relay::run(listener, devpipe::relay::Relay::new(keys)).await
+            if let Some(where_) = &sessions {
+                eprintln!("devpipe: minting keys for sessions at {where_}");
+            }
+            devpipe::relay::run(listener, devpipe::relay::Relay::with_sessions(keys, verify)).await
         }
     }
 }

@@ -36,6 +36,10 @@
   li { margin-bottom: 1.5rem; }
   .note { color: var(--dim); font-size: 0.9rem; border-left: 2px solid var(--line);
           padding-left: 1rem; }
+  .warn { color: var(--text); font-size: 0.9rem; border-left: 2px solid var(--ember);
+          padding-left: 1rem; }
+  h2 { font-size: 1.15rem; letter-spacing: -0.01em; margin: 2.5rem 0 0.4rem; }
+  .row button { flex: 1; }
   .bad { color: var(--ember); min-height: 1.2rem; font-size: 0.9rem; }
   [hidden] { display: none !important; }
 </style>
@@ -82,11 +86,33 @@ dp attach box/api</pre>
     </ol>
 
     <p class="note">
-      There is no machine list here yet, and that is not an omission we are
-      hiding. Your daemon listens on its own loopback and <code>dp</code>
-      reaches it over ssh — this site is not in that path, and cannot be.
-      What an account buys today is somewhere to keep that true when machines
-      can report in on their own.
+      That is the whole of it, and this site is not in the path: your daemon
+      listens on its own loopback and <code>dp</code> reaches it over ssh.
+      Nothing here can see your machine, and nothing here has to be up for it
+      to work.
+    </p>
+
+    <h2>Or, for a machine you cannot ssh into</h2>
+    <p class="lede">
+      Behind NAT, on a laptop, or reached from a browser. The machine dials out
+      to the relay and waits there.
+    </p>
+    <p class="warn">
+      This path is slower and less private than ssh, and worth choosing only
+      when ssh is not available: the relay terminates TLS, so it can see the
+      token going past. It is a second way in, not a replacement.
+    </p>
+
+    <div class="row">
+      <button id="mint-enrol" type="button">Key for a machine</button>
+      <button id="mint-reach" type="button">Key for this laptop</button>
+    </div>
+    <p class="bad" id="mint-error" role="alert"></p>
+    <pre id="minted" hidden></pre>
+    <p class="note" id="minted-note" hidden>
+      Shown once. The relay keeps only what it hashes to, so asking again
+      replaces this key — and the one it replaces stops working, which will
+      disconnect a machine still using it.
     </p>
   </section>
 
