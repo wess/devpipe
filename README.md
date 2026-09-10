@@ -1,6 +1,12 @@
 # Devpipe
 
-Remote agentic development environments, arranged as a tree:
+Coding agents want a real computer — a filesystem that persists, ports they can
+listen on, a toolchain, and the freedom to break things. Giving each one your
+laptop does not work, and giving each one a VPS costs three minutes and a
+volume to reconcile. Devpipe puts many of them on one machine you already have,
+and lets you attach to any of them from anywhere.
+
+It is arranged as a tree:
 
 ```
 machine            a box you can ssh into, running one daemon
@@ -17,7 +23,10 @@ underneath a running session.
 
 ## Put it on a box
 
-Any Linux machine you can ssh into. It does not need a public port.
+Any Linux machine you can ssh into, with systemd and either docker or podman.
+It does not need a public port, or a domain, or a certificate. A $12 VPS is
+enough to start; the base image wants about 3GB of disk before anything of
+yours is on it.
 
 ```sh
 ssh box 'curl -fsSL https://raw.githubusercontent.com/wess/devpipe/main/deploy/provision.sh | sh'
@@ -55,6 +64,13 @@ drop the prefix: `dp attach api`.
 
 Two environments can both want port 3000 — each gets a private network
 namespace and a host port of the kernel's choosing, which the tree prints.
+
+Give an environment a ceiling with `--memory`, and give a whole machine a
+default with `devpipe serve --memory 2g`. On a small box this is not optional:
+an agent running an unbounded build will otherwise have the kernel pick a
+victim, and on a machine where the daemon *is* the product, the victim is
+often the daemon. Every environment also gets a 4096-process limit whether you
+ask or not.
 
 `dp tree --watch` is live rather than polled: the daemon announces every
 change to whoever asked to watch, including sessions that end while nothing is
@@ -121,8 +137,11 @@ has to log in again.
 `ghcr.io/wess/devpipe-base:trixie` — Debian with Rust, Node, Bun, Python, git,
 the usual build tooling, and Claude Code already on it. About 2.5GB, pulled
 once per host. `deploy/docker/base.Dockerfile` builds it; `devpipe serve
---image` points a machine at something else, and `devpipe new --image` at
-something else for one environment.
+--image` points a machine at something else, and `dp new --image` at something
+else for one environment.
+
+Nothing about Devpipe requires that image. Any image with a shell works, and an
+image that sets `DEVPIPE_SHELL` gets that shell instead of `/bin/sh`.
 
 ## Sessions
 
@@ -134,6 +153,11 @@ gets the current screen replayed from a mirror the keeper maintains, not a ring
 of raw bytes — a byte ring starts mid-escape and the client's parser eats the
 text after it as parameters.
 
+One line of `deploy/devpipe.service` is what makes that true: `KillMode=process`.
+systemd's default signals every process in the unit's cgroup, keepers included,
+which turns a restart into exactly the thing keepers exist to prevent. sshd
+does the same for the same reason.
+
 What does not survive: a reboot, and stopping the environment. A pty into a
 container that is not running is a pty into nothing, whoever is holding it.
 
@@ -144,6 +168,21 @@ no container, no isolation, the user's own files and shell. It is for a box
 somebody already owns and works on. It holds exactly one environment, because
 nothing would separate a second one from the first.
 
+## What is not here yet
+
+Devpipe is 0.1. The daemon, the CLI and the tree are real and tested; the
+things below are known gaps rather than surprises.
+
+- **Files move by git.** There is no `dp cp`, and no file pane.
+- **Ports stay on the machine's loopback.** Reaching an environment's dev server
+  from your laptop means an `ssh -L` you set up yourself.
+- **A workspace is the only copy of itself.** If the machine dies, so does
+  anything not pushed.
+- **One client at a time, really.** A second attach to the same session works
+  but the two fight over the terminal size; there is no follower mode.
+- **No web or desktop client.** The pane protocol was built for them and `dp`
+  is the reference implementation, but they do not exist yet.
+
 ## Building it
 
 ```sh
@@ -152,3 +191,7 @@ cargo run -- serve --backend local
 ```
 
 `DEVPIPE_TEST_IMAGE` picks the image the container tests run against.
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -2,6 +2,11 @@
 name = "devpipe"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../README.md"
 description = "Remote agentic development environments: an environment's panes over one socket"
 
 [dependencies]
