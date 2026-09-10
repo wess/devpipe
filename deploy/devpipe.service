@@ -19,7 +19,21 @@ Description=Devpipe host
 ExecStart=/usr/local/bin/devpipe serve --bind 127.0.0.1:7455
 Restart=always
 RestartSec=2
-# Sessions are children of this process, so a restart takes them with it.
+
+# The whole point of keepers, and it does not work without this line.
+#
+# Sessions are separate processes so a restart of the daemon leaves them
+# running. But systemd's default KillMode=control-group signals every process
+# in the unit's cgroup, and a keeper is in it — being in its own *process*
+# group, which is what the daemon arranges, is a different thing entirely and
+# does not help. So a restart killed every session on the host, which is
+# exactly what keepers exist to prevent.
+#
+# KillMode=process signals only the daemon. It is what sshd does, for this
+# reason: a service restart should not log everybody out. The cost is that
+# systemd stops reaping strays, which here is the behaviour being asked for.
+KillMode=process
+
 # Long enough for the pty threads to flush what they were painting.
 TimeoutStopSec=10
 
